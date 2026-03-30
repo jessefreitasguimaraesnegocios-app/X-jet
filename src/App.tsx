@@ -16,6 +16,7 @@ import {
   Map as MapIcon,
   Speaker,
   Loader2,
+  LocateFixed,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -67,6 +68,7 @@ export default function App() {
   const [updated, setUpdated] = useState(() => new Date());
   const [ar, setAr] = useState(false);
   const [heading, setHeading] = useState<number | null>(null);
+  const [geoLoading, setGeoLoading] = useState(false);
 
   const centerRef = useRef(center);
   const abortRef = useRef<AbortController | null>(null);
@@ -104,6 +106,36 @@ export default function App() {
     },
     [radiusKm]
   );
+
+  const requestCurrentLocation = useCallback(() => {
+    if (!("geolocation" in navigator)) {
+      setErr("Geolocalização não disponível neste aparelho.");
+      return;
+    }
+    setGeoLoading(true);
+    setErr(null);
+    navigator.geolocation.getCurrentPosition(
+      (p) => {
+        setGeoLoading(false);
+        setCenter([p.coords.latitude, p.coords.longitude]);
+      },
+      (e) => {
+        setGeoLoading(false);
+        if (e.code === e.PERMISSION_DENIED) {
+          setErr("Permissão de localização negada.");
+        } else if (e.code === e.POSITION_UNAVAILABLE) {
+          setErr("Posição indisponível. Tente de novo ao ar livre.");
+        } else {
+          setErr("Não foi possível obter sua localização.");
+        }
+      },
+      {
+        enableHighAccuracy: true,
+        maximumAge: 0,
+        timeout: 20_000,
+      }
+    );
+  }, []);
 
   useEffect(() => {
     if (!("geolocation" in navigator)) {
@@ -228,6 +260,20 @@ export default function App() {
               {updated.toLocaleTimeString()}
             </span>
           </div>
+          <button
+            type="button"
+            onClick={() => requestCurrentLocation()}
+            disabled={geoLoading}
+            className="min-h-9 min-w-9 sm:min-h-11 sm:min-w-11 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center active:scale-95 disabled:opacity-50 touch-manipulation border border-emerald-500/30"
+            title="Onde estou agora"
+            aria-label="Atualizar minha localização no mapa"
+          >
+            {geoLoading ? (
+              <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
+            ) : (
+              <LocateFixed className="w-4 h-4 sm:w-5 sm:h-5" strokeWidth={2.25} />
+            )}
+          </button>
           <button
             type="button"
             onClick={() => void load()}
