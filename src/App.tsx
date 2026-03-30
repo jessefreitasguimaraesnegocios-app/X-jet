@@ -70,9 +70,13 @@ export default function App() {
       setFlights(data);
       setLastUpdate(new Date());
       setError(null);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Erro ao atualizar voos:", err);
-      setError("Limite de requisições atingido. Aguarde um momento antes de tentar novamente.");
+      const msg =
+        err instanceof Error
+          ? err.message
+          : "Não foi possível atualizar os voos. Verifique a conexão.";
+      setError(msg);
     } finally {
       setLoading(false);
     }
@@ -246,7 +250,8 @@ export default function App() {
 
             {/* Flights */}
             {flights.map((f) => (
-              f.latitude && f.longitude && (
+              f.latitude != null &&
+              f.longitude != null && (
                 <Marker 
                   key={f.icao24} 
                   position={[f.latitude, f.longitude]} 

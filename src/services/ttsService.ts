@@ -1,8 +1,22 @@
 import { GoogleGenAI, Modality } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+let aiClient: GoogleGenAI | null = null;
+
+function getClient(): GoogleGenAI | null {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) return null;
+  if (!aiClient) aiClient = new GoogleGenAI({ apiKey: key });
+  return aiClient;
+}
 
 export async function speakText(text: string) {
+  const ai = getClient();
+  if (!ai) {
+    console.warn(
+      "TTS: defina GEMINI_API_KEY (ou VITE_GEMINI_API_KEY) no arquivo .env na raiz do projeto. Copie .env.example para .env e cole sua chave."
+    );
+    return;
+  }
   try {
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash-preview-tts",
