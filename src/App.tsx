@@ -176,6 +176,7 @@ export default function App() {
   const [followPlane, setFollowPlane] = useState(() =>
     readStoredBool(LS_FOLLOW_PLANE, true)
   );
+  const [show3D, setShow3D] = useState(true);
   const [sheetSnap, setSheetSnap] = useState<0 | 1 | 2>(1);
   const sheetHeights = useSheetHeights();
 
@@ -310,12 +311,6 @@ export default function App() {
     }
     setGeoLoading(true);
     setErr(null);
-    setFollowPlane(false);
-    try {
-      localStorage.setItem(LS_FOLLOW_PLANE, "false");
-    } catch {
-      /* ignore */
-    }
     navigator.geolocation.getCurrentPosition(
       (p) => {
         setGeoLoading(false);
@@ -470,11 +465,29 @@ export default function App() {
   };
 
   const onPick = (f: FlightState) => {
+    if (pick?.icao24 === f.icao24) {
+      const next = !followPlane;
+      setFollowPlane(next);
+      try {
+        localStorage.setItem(LS_FOLLOW_PLANE, next ? "true" : "false");
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+
     routeAbortRef.current?.abort();
     const ac = new AbortController();
     routeAbortRef.current = ac;
 
     setPick(f);
+    setShow3D(true);
+    setFollowPlane(true);
+    try {
+      localStorage.setItem(LS_FOLLOW_PLANE, "true");
+    } catch {
+      /* ignore */
+    }
     setRouteInfo(null);
     setRouteLoading(true);
     trailPickRef.current = null;
@@ -526,6 +539,13 @@ export default function App() {
       Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
     return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
   };
+
+  const selectedBearing = pickLive ? bearing(pickLive) : null;
+  const northIndicatorDeg = heading != null ? -heading : 0;
+  const targetIndicatorDeg =
+    heading != null && selectedBearing != null
+      ? ((selectedBearing - heading + 540) % 360) - 180
+      : 0;
 
   return (
     <div className="relative w-full min-h-[100dvh] h-[100dvh] bg-neutral-950 text-white overflow-hidden font-sans">
@@ -731,11 +751,12 @@ export default function App() {
         )}
       </div>
 
-      {pick && (
+      {pick && show3D && (
         <Suspense fallback={null}>
           <Aircraft3DOverlay
             aircraftType={pickLive?.aircraftType ?? pick.aircraftType}
             callsign={pickLive?.callsign ?? pick.callsign}
+            onClose={() => setShow3D(false)}
           />
         </Suspense>
       )}
@@ -919,6 +940,39 @@ export default function App() {
                     />
                   </span>
                 </label>
+                <label className="flex items-center justify-between gap-3 px-3 py-3 cursor-pointer touch-manipulation">
+                  <span className="flex items-center gap-2 text-sm min-w-0">
+                    <Plane
+                      className="w-4 h-4 shrink-0 text-cyan-300"
+                      strokeWidth={2.25}
+                    />
+                    <span className="leading-tight">
+                      Modelo 3D no mapa
+                      <span className="block text-[10px] text-neutral-500 font-normal">
+                        Arraste a janela e feche quando quiser
+                      </span>
+                    </span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={show3D}
+                    onChange={(e) => setShow3D(e.target.checked)}
+                    className="sr-only"
+                  />
+                  <span
+                    className={cn(
+                      "shrink-0 w-11 h-6 rounded-full relative transition-colors pointer-events-none",
+                      show3D ? "bg-cyan-600" : "bg-white/20"
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform",
+                        show3D && "translate-x-5"
+                      )}
+                    />
+                  </span>
+                </label>
               </div>
 
               <div className="rounded-xl bg-white/5 border border-white/10 p-3 mb-4">
@@ -1015,33 +1069,33 @@ export default function App() {
             <div
               className="relative rounded-full border-2 border-white/25 flex items-center justify-center w-[min(17rem,82vw)] h-[min(17rem,82vw)] md:w-72 md:h-72"
             >
-              <div
-                className="absolute inset-0 transition-transform duration-100"
-                style={{ transform: `rotate(${-(heading ?? 0)}deg)` }}
-              >
-                <span className="absolute top-1 left-1/2 -translate-x-1/2 text-red-500 font-black text-sm">
-                  N
-                </span>
-                {flights.map((f) => (
-                  <div
-                    key={f.icao24}
-                    className="absolute inset-0 flex justify-center"
-                    style={{ transform: `rotate(${bearing(f)}deg)` }}
-                  >
-                    <div
-                      className={cn(
-                        "w-0.5 h-6 mt-3 rounded-full",
-                        pick?.icao24 === f.icao24 ? "bg-red-500" : "bg-blue-400"
-                      )}
-                    />
+              <span className="absolute top-1 left-1/2 -translate-x-1/2 text-red-500 font-black text-sm">
+                N
+              </span>
+              {!pick ? (
+                <div
+                  className="absolute inset-0 transition-transform duration-100"
+                  style={{ transform: `rotate(${northIndicatorDeg}deg)` }}
+                >
+                  <div className="absolute inset-0 flex justify-center">
+                    <div className="w-1 h-16 mt-3 rounded-full bg-gradient-to-t from-transparent via-blue-500 to-cyan-300" />
                   </div>
-                ))}
-              </div>
+                </div>
+              ) : (
+                <div
+                  className="absolute inset-0 transition-transform duration-100"
+                  style={{ transform: `rotate(${targetIndicatorDeg}deg)` }}
+                >
+                  <div className="absolute inset-0 flex justify-center">
+                    <div className="w-1.5 h-20 mt-2 rounded-full bg-gradient-to-t from-transparent via-emerald-400 to-red-500" />
+                  </div>
+                </div>
+              )}
               <div className="w-0.5 h-16 bg-gradient-to-t from-transparent to-red-500 rounded-full" />
             </div>
-            {pick && (
-              <p className="mt-6 text-lg font-bold">{pick.callsign}</p>
-            )}
+            <p className="mt-6 text-lg font-bold">
+              {pick ? `Apontando para ${pick.callsign}` : "Apontando para o Norte"}
+            </p>
           </motion.div>
         )}
       </AnimatePresence>

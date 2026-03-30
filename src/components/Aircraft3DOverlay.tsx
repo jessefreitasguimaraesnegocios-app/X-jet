@@ -1,6 +1,8 @@
 import { Suspense, useMemo } from "react";
 import { Canvas } from "@react-three/fiber";
 import { ContactShadows, OrbitControls } from "@react-three/drei";
+import { motion } from "motion/react";
+import { X } from "lucide-react";
 
 export function classifyAircraftType(
   t: string | null | undefined
@@ -70,20 +72,38 @@ function AircraftMesh({ variant }: { variant: "narrow" | "wide" | "regional" }) 
 type Props = {
   aircraftType: string | null | undefined;
   callsign: string;
+  onClose: () => void;
 };
 
 /**
  * Vista 3D estilizada (não é scan do avião real). Escala aproximada por categoria ICAO.
  */
-export default function Aircraft3DOverlay({ aircraftType, callsign }: Props) {
+export default function Aircraft3DOverlay({
+  aircraftType,
+  callsign,
+  onClose,
+}: Props) {
   const variant = classifyAircraftType(aircraftType);
 
   return (
     <div className="pointer-events-none absolute inset-0 z-[985] flex items-center justify-center px-3">
-      <div
+      <motion.div
+        drag
+        dragMomentum={false}
+        dragElastic={0.12}
+        dragConstraints={{ left: -160, right: 160, top: -220, bottom: 220 }}
+        whileDrag={{ scale: 1.01 }}
         className="pointer-events-auto relative mt-[-min(18dvh,7rem)] w-[min(92vw,340px)] h-[min(88vw,300px)] sm:h-[min(88vw,320px)] rounded-2xl border border-white/15 bg-black/50 backdrop-blur-md shadow-[0_0_40px_rgba(59,130,246,0.12)] overflow-hidden"
         style={{ touchAction: "none" }}
       >
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute right-2 top-2 z-20 w-8 h-8 rounded-full bg-black/55 border border-white/15 flex items-center justify-center text-white active:scale-95"
+          aria-label="Fechar modelo 3D"
+        >
+          <X className="w-4 h-4" />
+        </button>
         <Canvas
           shadows
           camera={{ position: [2.65, 1.45, 3.05], fov: 42 }}
@@ -133,7 +153,7 @@ export default function Aircraft3DOverlay({ aircraftType, callsign }: Props) {
             </p>
           )}
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 }
