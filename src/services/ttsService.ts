@@ -1,63 +1,60 @@
-import { GoogleGenAI, Modality } from "@google/genai";
+/**
+ * TTS via Web Speech API (grátis no navegador, sem chave de API).
+ * Chrome/Edge/Safari costumam ter voz pt-BR; no mobile depende do SO.
+ */
 
-let aiClient: GoogleGenAI | null = null;
-
-function getClient(): GoogleGenAI | null {
-  const key = process.env.GEMINI_API_KEY;
-  if (!key) return null;
-  if (!aiClient) aiClient = new GoogleGenAI({ apiKey: key });
-  return aiClient;
+function pickPortugueseVoice(
+  voices: SpeechSynthesisVoice[]
+): SpeechSynthesisVoice | null {
+  const norm = (l: string) => l.toLowerCase().replace(/_/g, "-");
+  return (
+    voices.find((v) => norm(v.lang) === "pt-br") ||
+    voices.find((v) => norm(v.lang).startsWith("pt")) ||
+    null
+  );
 }
 
-export async function speakText(text: string) {
-  const ai = getClient();
-  if (!ai) {
-    console.warn(
-      "TTS: defina GEMINI_API_KEY (ou VITE_GEMINI_API_KEY) no arquivo .env na raiz do projeto. Copie .env.example para .env e cole sua chave."
-    );
+/**
+ * Lê o texto em voz alta. Chamadas seguidas cancelam a anterior.
+ */
+export function speakText(text: string): void {
+  if (typeof window === "undefined" || !window.speechSynthesis) {
+    if (import.meta.env.DEV) {
+      console.warn("[X-Jet] Web Speech API não disponível neste ambiente.");
+    }
     return;
   }
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-preview-tts",
-      contents: [{ parts: [{ text: `Diga de forma clara e informativa: ${text}` }] }],
-      config: {
-        responseModalities: [Modality.AUDIO],
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: "Kore" },
-          },
-        },
-      },
-    });
 
-    const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-    if (base64Audio) {
-      const binary = atob(base64Audio);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
-      }
-      const blob = new Blob([bytes], { type: "audio/pcm;rate=24000" });
-      
-      // Since it's raw PCM 24kHz, we need to handle it properly.
-      // For simplicity in a web app, we can use AudioContext.
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-      const buffer = audioCtx.createBuffer(1, bytes.length / 2, 24000);
-      const channelData = buffer.getChannelData(0);
-      
-      // PCM 16-bit is 2 bytes per sample
-      const view = new DataView(bytes.buffer);
-      for (let i = 0; i < channelData.length; i++) {
-        channelData[i] = view.getInt16(i * 2, true) / 32768;
-      }
-      
-      const source = audioCtx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(audioCtx.destination);
-      source.start();
-    }
-  } catch (error) {
-    console.error("Erro no TTS:", error);
+  const trimmed = text.trim();
+  if (!trimmed) return;
+
+  const synth = window.speechSynthesis;
+
+  const run = () => {
+    synth.cancel();
+    const u = new SpeechSynthesisUtterance(trimmed);
+    u.lang = "pt-BR";
+    u.rate = 0.92;
+    u.pitch = 1;
+    const voice = pickPortugueseVoice(synth.getVoices());
+    if (voice) u.voice = voice;
+    synth.speak(u);
+  };
+
+  if (synth.getVoices().length > 0) {
+    run();
+    return;
   }
+
+  synth.addEventListener("voiceschanged", run, { once: true });
+  window.setTimeout(() => {
+    if (synth.getVoices().length > 0) run();
+  }, 400);
+}
+
+export function isSpeechSynthesisSupported(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.speechSynthesis !== "undefined"
+  );
 }
