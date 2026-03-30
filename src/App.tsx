@@ -1,4 +1,6 @@
 import React, {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -40,6 +42,10 @@ import type { FlightState } from "./types";
 import { cn } from "./lib/utils";
 import { buildFlightSpeechBriefing } from "./lib/flightSpeech";
 import { useLerpedLatLng } from "./hooks/useLerpedLatLng";
+
+const Aircraft3DOverlay = lazy(
+  () => import("./components/Aircraft3DOverlay")
+);
 
 delete (L.Icon.Default.prototype as unknown as { _getIconUrl?: unknown })
   ._getIconUrl;
@@ -114,6 +120,36 @@ function readStoredBool(key: string, defaultVal: boolean): boolean {
 const LS_AUTO_VOICE = "xjet_auto_voice";
 const LS_FOLLOW_PLANE = "xjet_follow_plane";
 
+function useSheetHeights() {
+  const [heights, setHeights] = useState({
+    peek: 168,
+    mid: 340,
+    full: 520,
+  });
+  useEffect(() => {
+    const upd = () => {
+      const v =
+        (typeof window !== "undefined" &&
+          (window.visualViewport?.height ?? window.innerHeight)) ||
+        640;
+      setHeights({
+        peek: Math.round(156 + 24),
+        mid: Math.round(Math.min(v * 0.42, 420)),
+        full: Math.round(Math.min(v * 0.85, 680)),
+      });
+    };
+    upd();
+    const vv = window.visualViewport;
+    vv?.addEventListener("resize", upd);
+    window.addEventListener("resize", upd);
+    return () => {
+      vv?.removeEventListener("resize", upd);
+      window.removeEventListener("resize", upd);
+    };
+  }, []);
+  return heights;
+}
+
 const SP_FALLBACK: [number, number] = [-23.5505, -46.6333];
 const POLL_MS_IDLE = 90_000;
 const POLL_MS_PICKED = 12_000;
@@ -140,6 +176,8 @@ export default function App() {
   const [followPlane, setFollowPlane] = useState(() =>
     readStoredBool(LS_FOLLOW_PLANE, true)
   );
+  const [sheetSnap, setSheetSnap] = useState<0 | 1 | 2>(1);
+  const sheetHeights = useSheetHeights();
 
   const centerRef = useRef(center);
   const abortRef = useRef<AbortController | null>(null);
@@ -183,13 +221,18 @@ export default function App() {
         p.baroAltitude === u.baroAltitude &&
         p.velocity === u.velocity &&
         p.trueTrack === u.trueTrack &&
-        p.onGround === u.onGround
+        p.onGround === u.onGround &&
+        p.aircraftType === u.aircraftType
       ) {
         return p;
       }
       return u;
     });
   }, [flights, pick?.icao24]);
+
+  useEffect(() => {
+    if (pick?.icao24) setSheetSnap(1);
+  }, [pick?.icao24]);
 
   useEffect(() => {
     if (!pickLive || pickLive.latitude == null || pickLive.longitude == null) {
@@ -218,7 +261,7 @@ export default function App() {
           return prev;
         }
       }
-      return [...prev, [lat, lon]].slice(-160);
+      return [...prev, [lat, lon] as [number, number]].slice(-160);
     });
   }, [
     pick,
@@ -688,6 +731,15 @@ export default function App() {
         )}
       </div>
 
+      {pick && (
+        <Suspense fallback={null}>
+          <Aircraft3DOverlay
+            aircraftType={pickLive?.aircraftType ?? pick.aircraftType}
+            callsign={pickLive?.callsign ?? pick.callsign}
+          />
+        </Suspense>
+      )}
+
       {loading && (
         <div className="absolute inset-0 z-[2000] bg-black/75 flex flex-col items-center justify-center gap-3">
           <Loader2 className="w-11 h-11 text-blue-500 animate-spin" />
@@ -700,24 +752,71 @@ export default function App() {
       <AnimatePresence>
         {pick && (
           <motion.div
+            key="flight-sheet"
             initial={{ y: "100%" }}
             animate={{ y: 0 }}
             exit={{ y: "100%" }}
-            transition={{ type: "spring", damping: 30, stiffness: 320 }}
-            className="absolute inset-x-0 bottom-0 z-[1001] max-h-[min(72dvh,28rem)] flex flex-col rounded-t-3xl bg-neutral-900/97 border-t border-white/10 shadow-2xl"
-            style={{
-              paddingBottom: "max(1rem, env(safe-area-inset-bottom))",
-            }}
+            transition={{ type: "spring", damping: 32, stiffness: 340 }}
+            className="absolute inset-x-0 bottom-0 z-[1001] flex flex-col justify-end pointer-events-none"
           >
-            <div className="w-9 h-1 rounded-full bg-white/25 mx-auto mt-3 shrink-0 md:hidden" />
-            <div className="overflow-y-auto overscroll-contain px-4 pt-4 flex-1 min-h-0">
-              <div className="flex justify-between gap-3 mb-4">
+            <motion.div
+              animate={{
+                height:
+                  sheetSnap === 0
+                    ? sheetHeights.peek
+                    : sheetSnap === 1
+                      ? sheetHeights.mid
+                      : sheetHeights.full,
+              }}
+              transition={{ type: "spring", damping: 36, stiffness: 420 }}
+              className="pointer-events-auto flex flex-col min-h-0 rounded-t-3xl bg-neutral-900/97 border-t border-white/10 shadow-2xl overflow-hidden w-full box-border"
+              style={{
+                paddingBottom: "max(1rem, env(safe-area-inset-bottom))",
+              }}
+            >
+              <motion.div
+                drag="y"
+                dragConstraints={{ top: 0, bottom: 0 }}
+                dragElastic={0.18}
+                dragMomentum={false}
+                onTap={() =>
+                  setSheetSnap((s) => (((s + 1) % 3) as 0 | 1 | 2))
+                }
+                onDragEnd={(_, info) => {
+                  const dy = info.offset.y;
+                  const vy = info.velocity.y;
+                  if (vy > 420 || dy > 56) {
+                    setSheetSnap((s) =>
+                      s > 0 ? ((s - 1) as 0 | 1 | 2) : 0
+                    );
+                  } else if (vy < -420 || dy < -56) {
+                    setSheetSnap((s) =>
+                      s < 2 ? ((s + 1) as 0 | 1 | 2) : 2
+                    );
+                  }
+                }}
+                className="shrink-0 flex flex-col items-center pt-2 pb-1 cursor-grab active:cursor-grabbing touch-manipulation select-none"
+                style={{ touchAction: "none" }}
+              >
+                <div className="w-12 h-1.5 rounded-full bg-white/35 mb-1" />
+                <p className="text-[9px] text-neutral-500 uppercase tracking-widest">
+                  Arraste ou toque ·{" "}
+                  {sheetSnap === 0 ? "Mínimo" : sheetSnap === 1 ? "Médio" : "Cheio"}
+                </p>
+              </motion.div>
+
+              <div className="shrink-0 flex justify-between gap-3 px-4 pb-2 border-b border-white/5">
                 <div className="min-w-0">
-                  <h2 className="text-2xl font-black truncate">
+                  <h2 className="text-xl sm:text-2xl font-black truncate">
                     {pickLive?.callsign ?? pick.callsign}
                   </h2>
-                  <p className="text-blue-400 text-xs font-mono uppercase">
+                  <p className="text-blue-400 text-[11px] font-mono uppercase truncate">
                     {pickLive?.originCountry ?? pick.originCountry}
+                    {(pickLive?.aircraftType ?? pick.aircraftType) && (
+                      <span className="text-neutral-500 ml-2">
+                        · {pickLive?.aircraftType ?? pick.aircraftType}
+                      </span>
+                    )}
                   </p>
                 </div>
                 <button
@@ -736,6 +835,7 @@ export default function App() {
                 </button>
               </div>
 
+              <div className="overflow-y-auto overscroll-contain px-4 pt-3 flex-1 min-h-0">
               <div className="rounded-xl bg-white/5 border border-white/10 divide-y divide-white/10 mb-4">
                 <label className="flex items-center justify-between gap-3 px-3 py-3 cursor-pointer touch-manipulation">
                   <span className="flex items-center gap-2 text-sm min-w-0">
@@ -895,7 +995,8 @@ export default function App() {
               >
                 <Speaker className="w-5 h-5" /> Ouvir
               </button>
-            </div>
+              </div>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>

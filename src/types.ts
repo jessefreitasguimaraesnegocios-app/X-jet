@@ -1,6 +1,8 @@
 export interface FlightState {
   icao24: string;
   callsign: string;
+  /** Código tipo ICAO (ex. B738) quando a fonte ADS-B envia. */
+  aircraftType?: string | null;
   originCountry: string;
   timePosition: number | null;
   lastContact: number;

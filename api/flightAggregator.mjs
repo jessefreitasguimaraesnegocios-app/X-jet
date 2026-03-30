@@ -69,9 +69,14 @@ function mapAdsb(a) {
       : typeof a.true_heading === "number"
         ? a.true_heading
         : null;
+  const acType =
+    typeof a.type === "string" && a.type.trim()
+      ? String(a.type).trim().toUpperCase()
+      : null;
   return {
     icao24: hex,
     callsign: flight,
+    aircraftType: acType,
     originCountry: "—",
     timePosition: null,
     lastContact: Math.floor(Date.now() / 1000),
@@ -110,9 +115,14 @@ function mapAirplanes(a) {
   const baroM =
     typeof alt === "number" ? alt * FT_TO_M : onGround ? 0 : null;
   const gs = typeof a.gs === "number" ? a.gs * KNOTS_TO_MS : null;
+  const acType =
+    typeof a.type === "string" && a.type.trim()
+      ? String(a.type).trim().toUpperCase()
+      : null;
   return {
     icao24: hex,
     callsign: flight,
+    aircraftType: acType,
     originCountry: "—",
     timePosition: null,
     lastContact: Math.floor(Date.now() / 1000),
