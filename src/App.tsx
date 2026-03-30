@@ -160,6 +160,8 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (!isARMode) return;
+
     const handleOrientation = (e: DeviceOrientationEvent) => {
       const webkitHeading = (e as any).webkitCompassHeading;
       if (webkitHeading !== undefined) {
@@ -171,7 +173,26 @@ export default function App() {
 
     window.addEventListener("deviceorientation", handleOrientation, true);
     return () => window.removeEventListener("deviceorientation", handleOrientation);
-  }, []);
+  }, [isARMode]);
+
+  const toggleARMode = useCallback(async () => {
+    if (isARMode) {
+      setIsARMode(false);
+      return;
+    }
+    const DO = DeviceOrientationEvent as unknown as {
+      requestPermission?: () => Promise<PermissionState>;
+    };
+    if (typeof DO.requestPermission === "function") {
+      try {
+        const state = await DO.requestPermission();
+        if (state !== "granted") return;
+      } catch {
+        return;
+      }
+    }
+    setIsARMode(true);
+  }, [isARMode]);
 
   const handleFlightSelect = (flight: FlightState) => {
     setSelectedFlight(flight);
@@ -207,40 +228,63 @@ export default function App() {
   };
 
   return (
-    <div className="relative w-full h-screen bg-neutral-950 text-white font-sans overflow-hidden">
+    <div className="relative w-full min-h-[100dvh] h-[100dvh] bg-neutral-950 text-white font-sans overflow-hidden">
       {/* Header */}
-      <header className="absolute top-0 left-0 right-0 z-[1000] p-4 flex justify-between items-center bg-gradient-to-b from-black/80 to-transparent">
-        <div className="flex items-center gap-2">
-          <div className="w-10 h-10 bg-blue-600 rounded-full flex items-center justify-center shadow-lg shadow-blue-500/20">
-            <Plane className="w-6 h-6 text-white" />
+      <header
+        className="absolute top-0 left-0 right-0 z-[1000] flex justify-between items-center bg-gradient-to-b from-black/85 to-transparent px-3 sm:px-4"
+        style={{
+          paddingTop: "max(0.75rem, env(safe-area-inset-top))",
+          paddingBottom: "0.5rem",
+        }}
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="shrink-0 w-10 h-10 sm:w-11 sm:h-11 bg-blue-600 rounded-full flex items-center justify-center shadow-lg shadow-blue-500/20">
+            <Plane className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
           </div>
-          <div>
-            <h1 className="text-lg font-bold tracking-tight">X-Jet</h1>
-            <p className="text-xs text-blue-400 font-mono uppercase tracking-widest">Tempo Real</p>
+          <div className="min-w-0">
+            <h1 className="text-base sm:text-lg font-bold tracking-tight truncate">X-Jet</h1>
+            <p className="text-[10px] sm:text-xs text-blue-400 font-mono uppercase tracking-widest truncate">
+              Tempo real
+            </p>
           </div>
         </div>
-        
-        <div className="flex items-center gap-3">
-          <button 
+
+        <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
+          <div className="flex flex-col items-end pr-0.5 md:pr-0">
+            <span className="text-[8px] sm:text-[10px] text-neutral-400 uppercase font-bold leading-tight">
+              Atualizado
+            </span>
+            <span className="text-[10px] sm:text-xs font-mono tabular-nums">
+              {lastUpdate.toLocaleTimeString(undefined, {
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+              })}
+            </span>
+          </div>
+          <button
+            type="button"
             onClick={handleManualRefresh}
             disabled={loading}
-            className="p-3 rounded-full bg-white/10 text-white hover:bg-white/20 disabled:opacity-50 transition-all"
-            title="Atualizar Voos"
+            className="min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 p-3 rounded-full bg-white/10 text-white hover:bg-white/20 active:scale-95 disabled:opacity-50 transition-all touch-manipulation"
+            title="Atualizar voos"
+            aria-label="Atualizar voos"
           >
-            <Loader2 className={cn("w-5 h-5", loading && "animate-spin")} />
+            <Loader2 className={cn("w-5 h-5 mx-auto", loading && "animate-spin")} />
           </button>
-          <div className="hidden md:flex flex-col items-end">
-            <span className="text-[10px] text-neutral-400 uppercase font-bold">Última Atualização</span>
-            <span className="text-xs font-mono">{lastUpdate.toLocaleTimeString()}</span>
-          </div>
-          <button 
-            onClick={() => setIsARMode(!isARMode)}
+          <button
+            type="button"
+            onClick={() => void toggleARMode()}
             className={cn(
-              "p-3 rounded-full transition-all duration-300",
-              isARMode ? "bg-red-600 text-white shadow-lg shadow-red-500/40" : "bg-white/10 text-white hover:bg-white/20"
+              "min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 p-3 rounded-full transition-all duration-300 touch-manipulation active:scale-95",
+              isARMode
+                ? "bg-red-600 text-white shadow-lg shadow-red-500/40"
+                : "bg-white/10 text-white hover:bg-white/20"
             )}
+            title={isARMode ? "Ver mapa" : "Modo bússola"}
+            aria-label={isARMode ? "Ver mapa" : "Modo bússola"}
           >
-            {isARMode ? <MapIcon className="w-5 h-5" /> : <Compass className="w-5 h-5" />}
+            {isARMode ? <MapIcon className="w-5 h-5 mx-auto" /> : <Compass className="w-5 h-5 mx-auto" />}
           </button>
         </div>
       </header>
@@ -252,10 +296,11 @@ export default function App() {
             initial={{ opacity: 0, y: -20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
-            className="absolute top-20 left-1/2 -translate-x-1/2 z-[1100] bg-red-600/90 backdrop-blur-md px-4 py-2 rounded-full border border-red-400/50 flex items-center gap-2 shadow-lg"
+            style={{ top: "max(5rem, calc(env(safe-area-inset-top) + 3.5rem))" }}
+            className="absolute left-1/2 -translate-x-1/2 z-[1100] max-w-[min(100vw-1.5rem,24rem)] bg-red-600/90 backdrop-blur-md px-3 py-2.5 rounded-2xl border border-red-400/50 flex items-start gap-2 shadow-lg"
           >
-            <Info className="w-4 h-4" />
-            <span className="text-xs font-bold">{error}</span>
+            <Info className="w-4 h-4 shrink-0 mt-0.5" />
+            <span className="text-[11px] sm:text-xs font-bold leading-snug text-left">{error}</span>
           </motion.div>
         )}
       </AnimatePresence>
@@ -263,11 +308,15 @@ export default function App() {
       {/* Main Map */}
       <div className="w-full h-full">
         {userLocation && (
-          <MapContainer 
-            center={userLocation} 
-            zoom={8} 
-            className="w-full h-full grayscale-[0.2] brightness-[0.8] contrast-[1.2]"
+          <MapContainer
+            center={userLocation}
+            zoom={8}
+            className="w-full h-full grayscale-[0.2] brightness-[0.8] contrast-[1.2] touch-pan-x touch-pan-y"
             zoomControl={false}
+            scrollWheelZoom={true}
+            dragging={true}
+            touchZoom={true}
+            doubleClickZoom={true}
           >
             <TileLayer
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
@@ -326,36 +375,44 @@ export default function App() {
 
       {/* Loading Overlay */}
       {loading && (
-        <div className="absolute inset-0 z-[2000] bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center">
+        <div className="absolute inset-0 z-[2000] bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center px-6 text-center">
           <Loader2 className="w-12 h-12 text-blue-500 animate-spin mb-4" />
-          <h2 className="text-xl font-light tracking-widest uppercase">Localizando Aeronaves...</h2>
+          <h2 className="text-base sm:text-xl font-light tracking-widest uppercase">
+            Localizando aeronaves…
+          </h2>
         </div>
       )}
 
       {/* Flight Details Panel */}
       <AnimatePresence>
         {selectedFlight && (
-          <motion.div 
+          <motion.div
             initial={{ y: "100%" }}
             animate={{ y: 0 }}
             exit={{ y: "100%" }}
-            className="absolute bottom-0 left-0 right-0 z-[1001] bg-neutral-900/95 backdrop-blur-xl border-t border-white/10 p-6 rounded-t-3xl shadow-2xl"
+            transition={{ type: "spring", damping: 28, stiffness: 320 }}
+            className="absolute bottom-0 left-0 right-0 z-[1001] bg-neutral-900/95 backdrop-blur-xl border-t border-white/10 px-4 pt-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:p-6 rounded-t-3xl shadow-2xl max-h-[min(78dvh,32rem)] flex flex-col"
           >
-            <div className="max-w-2xl mx-auto">
-              <div className="flex justify-between items-start mb-6">
-                <div>
-                  <h2 className="text-3xl font-black tracking-tighter text-white">{selectedFlight.callsign}</h2>
+            <div className="w-10 h-1 rounded-full bg-white/20 mx-auto mb-4 shrink-0 md:hidden" aria-hidden />
+            <div className="max-w-2xl mx-auto w-full overflow-y-auto overscroll-contain min-h-0 flex-1">
+              <div className="flex justify-between items-start mb-4 sm:mb-6 gap-3">
+                <div className="min-w-0">
+                  <h2 className="text-2xl sm:text-3xl font-black tracking-tighter text-white truncate">
+                    {selectedFlight.callsign}
+                  </h2>
                   <p className="text-blue-400 font-mono text-sm uppercase">{selectedFlight.originCountry}</p>
                 </div>
-                <button 
+                <button
+                  type="button"
                   onClick={() => setSelectedFlight(null)}
-                  className="p-2 bg-white/5 hover:bg-white/10 rounded-full transition-colors"
+                  className="shrink-0 min-h-11 min-w-11 flex items-center justify-center bg-white/5 hover:bg-white/10 active:scale-95 rounded-full transition-colors touch-manipulation"
+                  aria-label="Fechar"
                 >
                   <X className="w-6 h-6" />
                 </button>
               </div>
 
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-6 mb-8">
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-4 sm:gap-6 mb-6 sm:mb-8">
                 <div className="space-y-1">
                   <span className="text-[10px] text-neutral-500 uppercase font-bold tracking-wider">Modelo</span>
                   <p className="text-sm font-medium">{flightDetails?.model || "Desconhecido"}</p>
@@ -382,15 +439,23 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="flex gap-3">
-                <button 
-                  onClick={() => speakText(`Voo ${selectedFlight.callsign}. Altitude ${Math.round(selectedFlight.baroAltitude || 0)} metros. Velocidade ${Math.round((selectedFlight.velocity || 0) * 3.6)} quilômetros por hora.`)}
-                  className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95"
+              <div className="flex flex-col sm:flex-row gap-3">
+                <button
+                  type="button"
+                  onClick={() =>
+                    speakText(
+                      `Voo ${selectedFlight.callsign}. Altitude ${Math.round(selectedFlight.baroAltitude || 0)} metros. Velocidade ${Math.round((selectedFlight.velocity || 0) * 3.6)} quilômetros por hora.`
+                    )
+                  }
+                  className="flex-1 min-h-12 bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all active:scale-[0.98] touch-manipulation"
                 >
-                  <Speaker className="w-5 h-5" /> Ouvir Detalhes
+                  <Speaker className="w-5 h-5 shrink-0" /> Ouvir detalhes
                 </button>
-                <button className="flex-1 bg-white/10 hover:bg-white/20 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95">
-                  <Info className="w-5 h-5" /> Mais Info
+                <button
+                  type="button"
+                  className="flex-1 min-h-12 bg-white/10 hover:bg-white/20 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all active:scale-[0.98] touch-manipulation"
+                >
+                  <Info className="w-5 h-5 shrink-0" /> Mais info
                 </button>
               </div>
             </div>
@@ -405,10 +470,11 @@ export default function App() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="absolute inset-0 z-[1500] bg-black/40 backdrop-blur-[2px] pointer-events-none flex flex-col items-center justify-center"
+            className="absolute inset-0 z-[1500] bg-black/40 backdrop-blur-[2px] pointer-events-none flex flex-col items-center justify-center px-4"
+            style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}
           >
-            {/* Compass Ring */}
-            <div className="relative w-80 h-80 border-2 border-white/20 rounded-full flex items-center justify-center">
+            {/* Compass Ring — escala no mobile */}
+            <div className="relative w-[min(17.5rem,88vw)] h-[min(17.5rem,88vw)] sm:w-72 sm:h-72 md:w-80 md:h-80 border-2 border-white/20 rounded-full flex items-center justify-center">
               <div 
                 className="absolute inset-0 transition-transform duration-100"
                 style={{ transform: `rotate(${- (compassHeading || 0)}deg)` }}
@@ -457,23 +523,27 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Radius Control */}
-      <div className="absolute bottom-8 left-8 z-[1000] hidden md:block">
-        <div className="bg-neutral-900/80 backdrop-blur-md p-4 rounded-2xl border border-white/10 w-48">
-          <div className="flex justify-between items-center mb-2">
-            <span className="text-[10px] text-neutral-500 uppercase font-bold">Raio de Busca</span>
-            <span className="text-xs font-mono text-blue-400">{radius}km</span>
+      {/* Raio: barra full-width no mobile (acima da home indicator), card no desktop */}
+      {!selectedFlight && (
+        <div className="absolute left-0 right-0 z-[1000] bottom-[max(0.75rem,env(safe-area-inset-bottom))] md:left-8 md:right-auto md:bottom-8 md:w-48">
+          <div className="mx-3 md:mx-0 bg-neutral-900/92 backdrop-blur-md px-4 py-3 md:p-4 rounded-2xl border border-white/10 shadow-lg">
+            <div className="flex justify-between items-center mb-2 gap-2">
+              <span className="text-[10px] text-neutral-500 uppercase font-bold tracking-wide">
+                Raio de busca
+              </span>
+              <span className="text-xs font-mono text-blue-400 tabular-nums">{radius} km</span>
+            </div>
+            <input
+              type="range"
+              min={10}
+              max={500}
+              value={radius}
+              onChange={(e) => setRadius(parseInt(e.target.value, 10))}
+              className="w-full h-2 md:h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-500 touch-manipulation"
+            />
           </div>
-          <input 
-            type="range" 
-            min="10" 
-            max="500" 
-            value={radius} 
-            onChange={(e) => setRadius(parseInt(e.target.value))}
-            className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-500"
-          />
         </div>
-      </div>
+      )}
     </div>
   );
 }
