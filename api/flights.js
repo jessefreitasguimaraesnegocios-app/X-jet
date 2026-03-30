@@ -4,15 +4,20 @@
 import { parse as parseUrl } from "node:url";
 import { aggregateFlights } from "./flightAggregator.mjs";
 
+function first(v) {
+  if (v == null) return undefined;
+  return Array.isArray(v) ? v[0] : v;
+}
+
 function parseBounds(q) {
-  const n = (x) => {
-    const v = Number(x);
+  const n = (key) => {
+    const v = Number(first(q[key]));
     return Number.isFinite(v) ? v : NaN;
   };
-  const lamin = n(q.lamin);
-  const lomin = n(q.lomin);
-  const lamax = n(q.lamax);
-  const lomax = n(q.lomax);
+  const lamin = n("lamin");
+  const lomin = n("lomin");
+  const lamax = n("lamax");
+  const lomax = n("lomax");
   if ([lamin, lomin, lamax, lomax].some((x) => Number.isNaN(x))) return null;
   if (lamin >= lamax || lomin >= lomax) return null;
   return { lamin, lomin, lamax, lomax };

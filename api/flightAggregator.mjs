@@ -32,8 +32,9 @@ function inBounds(p, b) {
 }
 
 function mapOpenSkyState(s) {
+  if (!Array.isArray(s) || s.length < 9) return null;
   return {
-    icao24: s[0],
+    icao24: s[0] != null ? String(s[0]) : "",
     callsign: (s[1] && String(s[1]).trim()) || "N/A",
     originCountry: s[2] || "—",
     timePosition: s[3],
@@ -136,18 +137,36 @@ function mapAirplanes(a) {
 }
 
 async function fetchOpenSky(bounds) {
-  const q = new URLSearchParams({
-    lamin: String(bounds.lamin),
-    lomin: String(bounds.lomin),
-    lamax: String(bounds.lamax),
-    lomax: String(bounds.lomax),
-  });
-  const url = `https://opensky-network.org/api/states/all?${q}`;
-  const res = await fetch(url, { headers: { Accept: "application/json", "User-Agent": UA } });
-  if (!res.ok) return [];
-  const data = await res.json();
-  if (!data.states || !Array.isArray(data.states)) return [];
-  return data.states.map(mapOpenSkyState);
+  try {
+    const q = new URLSearchParams({
+      lamin: String(bounds.lamin),
+      lomin: String(bounds.lomin),
+      lamax: String(bounds.lamax),
+      lomax: String(bounds.lomax),
+    });
+    const url = `https://opensky-network.org/api/states/all?${q}`;
+    const init = {
+      headers: { Accept: "application/json", "User-Agent": UA },
+    };
+    if (typeof AbortSignal !== "undefined" && AbortSignal.timeout) {
+      init.signal = AbortSignal.timeout(28000);
+    }
+    const res = await fetch(url, init);
+    if (!res.ok) return [];
+    const text = await res.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      return [];
+    }
+    if (!data.states || !Array.isArray(data.states)) return [];
+    return data.states
+      .map(mapOpenSkyState)
+      .filter((p) => p != null && p.icao24);
+  } catch {
+    return [];
+  }
 }
 
 async function fetchAdsb(bounds) {
@@ -189,17 +208,22 @@ function filterBox(list, bounds) {
  * @param {{ lamin: number, lomin: number, lamax: number, lomax: number }} bounds
  */
 export async function aggregateFlights(bounds) {
-  let list = await fetchOpenSky(bounds);
-  list = list.filter(
-    (p) => p.latitude != null && p.longitude != null
-  );
+  try {
+    let list = await fetchOpenSky(bounds);
+    list = list.filter(
+      (p) => p.latitude != null && p.longitude != null
+    );
 
-  if (list.length === 0) {
-    list = filterBox(await fetchAdsb(bounds), bounds);
-  }
-  if (list.length === 0) {
-    list = filterBox(await fetchAirplanes(bounds), bounds);
-  }
+    if (list.length === 0) {
+      list = filterBox(await fetchAdsb(bounds), bounds);
+    }
+    if (list.length === 0) {
+      list = filterBox(await fetchAirplanes(bounds), bounds);
+    }
 
-  return list;
+    return list;
+  } catch (e) {
+    console.error("aggregateFlights:", e);
+    return [];
+  }
 }
