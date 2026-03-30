@@ -32,9 +32,11 @@ export default defineConfig({
 
             if (pathname === '/api/flight-route') {
               try {
-                const {lookupFlightRoute, normalizeIcao24} = await import(
-                  './api/flightRouteLookup.mjs'
-                );
+                const {
+                  lookupFlightRoute,
+                  normalizeIcao24,
+                  normalizeCallsign,
+                } = await import('./api/flightRouteLookup.mjs');
                 const parsed = parseUrl(raw, true);
                 const q = parsed.query ?? {};
                 const v = Array.isArray(q.icao24) ? q.icao24[0] : q.icao24;
@@ -44,7 +46,10 @@ export default defineConfig({
                   res.end(JSON.stringify({error: 'invalid_icao24'}));
                   return;
                 }
-                const route = await lookupFlightRoute(v);
+                const csRaw = Array.isArray(q.callsign) ? q.callsign[0] : q.callsign;
+                const callsign =
+                  typeof csRaw === 'string' ? normalizeCallsign(csRaw) ?? undefined : undefined;
+                const route = await lookupFlightRoute(v, callsign);
                 res.statusCode = 200;
                 res.setHeader('Content-Type', 'application/json; charset=utf-8');
                 res.end(JSON.stringify(route));

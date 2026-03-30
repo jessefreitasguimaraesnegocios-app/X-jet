@@ -3,9 +3,17 @@ export type FlightRouteInfo = {
   arrival: string | null;
 };
 
-export async function fetchFlightRoute(icao24: string): Promise<FlightRouteInfo> {
-  const q = encodeURIComponent(icao24.replace(/^~/, ""));
-  const res = await fetch(`/api/flight-route?icao24=${q}`, {
+export async function fetchFlightRoute(
+  icao24: string,
+  callsign?: string | null
+): Promise<FlightRouteInfo> {
+  const params = new URLSearchParams();
+  params.set("icao24", icao24.replace(/^~/, ""));
+  const cs = callsign?.trim();
+  if (cs && cs.toUpperCase() !== "N/A") {
+    params.set("callsign", cs);
+  }
+  const res = await fetch(`/api/flight-route?${params}`, {
     headers: { Accept: "application/json" },
   });
   if (!res.ok) {

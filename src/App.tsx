@@ -73,6 +73,7 @@ export default function App() {
   const [ar, setAr] = useState(false);
   const [heading, setHeading] = useState<number | null>(null);
   const [geoLoading, setGeoLoading] = useState(false);
+  const [geoBanner, setGeoBanner] = useState<string | null>(null);
   const [routeInfo, setRouteInfo] = useState<FlightRouteInfo | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
 
@@ -92,8 +93,10 @@ export default function App() {
       abortRef.current = ac;
 
       const silent = opts?.silent === true;
-      if (!silent) setLoading(true);
-      setErr(null);
+      if (!silent) {
+        setLoading(true);
+        setErr(null);
+      }
 
       try {
         const b = boundsFromCenterRadiusKm(pos[0], pos[1], radiusKm);
@@ -123,6 +126,7 @@ export default function App() {
     navigator.geolocation.getCurrentPosition(
       (p) => {
         setGeoLoading(false);
+        setGeoBanner(null);
         setCenter([p.coords.latitude, p.coords.longitude]);
       },
       (e) => {
@@ -144,21 +148,81 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!("geolocation" in navigator)) {
+    let cancelled = false;
+
+    const secure =
+      typeof window !== "undefined" &&
+      (window.isSecureContext ||
+        window.location.hostname === "localhost" ||
+        window.location.hostname === "127.0.0.1");
+
+    if (!secure) {
+      setGeoBanner(
+        "Use HTTPS (ou localhost) para o navegador liberar o GPS no mapa."
+      );
       setCenter(SP_FALLBACK);
-      return;
+      return () => {
+        cancelled = true;
+      };
     }
-    navigator.geolocation.getCurrentPosition(
-      (p) => {
-        setCenter([p.coords.latitude, p.coords.longitude]);
-      },
-      () => setCenter(SP_FALLBACK),
-      {
-        enableHighAccuracy: false,
-        maximumAge: 300_000,
-        timeout: 12_000,
+
+    if (!("geolocation" in navigator)) {
+      setGeoBanner("Este navegador não suporta geolocalização.");
+      setCenter(SP_FALLBACK);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const readPosition = (options: PositionOptions) =>
+      new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, options);
+      });
+
+    void (async () => {
+      try {
+        const p = await readPosition({
+          enableHighAccuracy: true,
+          maximumAge: 0,
+          timeout: 18_000,
+        });
+        if (!cancelled) {
+          setCenter([p.coords.latitude, p.coords.longitude]);
+          setGeoBanner(null);
+        }
+        return;
+      } catch {
+        /* tenta de novo com modo mais permissivo */
       }
-    );
+      try {
+        const p = await readPosition({
+          enableHighAccuracy: false,
+          maximumAge: 0,
+          timeout: 14_000,
+        });
+        if (!cancelled) {
+          setCenter([p.coords.latitude, p.coords.longitude]);
+          setGeoBanner(null);
+        }
+      } catch (e: unknown) {
+        if (cancelled) return;
+        setCenter(SP_FALLBACK);
+        const pe = e as GeolocationPositionError;
+        if (pe?.code === 1) {
+          setGeoBanner(
+            "Localização negada ou bloqueada. Toque no ícone verde e permita o acesso ao GPS."
+          );
+        } else {
+          setGeoBanner(
+            "Não detectamos sua posição (GPS fraco ou timeout). Toque no ícone verde para tentar de novo ao ar livre."
+          );
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -229,7 +293,7 @@ export default function App() {
           [f.latitude - 0.5, f.longitude + 0.5],
         ],
     });
-    void fetchFlightRoute(f.icao24)
+    void fetchFlightRoute(f.icao24, f.callsign)
       .then((r) => setRouteInfo(r))
       .finally(() => setRouteLoading(false));
     void speakText(`Voo ${f.callsign} selecionado.`);
@@ -309,12 +373,30 @@ export default function App() {
       </header>
 
       <AnimatePresence>
-        {err && (
+        {geoBanner && (
           <motion.div
             initial={{ opacity: 0, y: -8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
             style={{ top: "max(4.5rem, env(safe-area-inset-top) + 3rem)" }}
+            className="absolute left-1/2 -translate-x-1/2 z-[1100] max-w-[calc(100vw-1.5rem)] px-3 py-2 rounded-xl bg-amber-600/95 text-[11px] font-semibold leading-snug text-center text-neutral-950"
+          >
+            {geoBanner}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {err && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            style={{
+              top: geoBanner
+                ? "max(8.5rem, env(safe-area-inset-top) + 6.5rem)"
+                : "max(4.5rem, env(safe-area-inset-top) + 3rem)",
+            }}
             className="absolute left-1/2 -translate-x-1/2 z-[1100] max-w-[calc(100vw-1.5rem)] px-3 py-2 rounded-xl bg-red-600/95 text-[11px] font-semibold leading-snug text-center"
           >
             {err}
@@ -442,7 +524,7 @@ export default function App() {
 
               <div className="rounded-xl bg-white/5 border border-white/10 p-3 mb-4">
                 <p className="text-[10px] text-neutral-500 uppercase font-bold mb-2">
-                  Rota (estimativa OpenSky)
+                  Rota (ADSBDB pelo indicativo)
                 </p>
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <div>
@@ -471,8 +553,8 @@ export default function App() {
                   </div>
                 </div>
                 <p className="text-[9px] text-neutral-500 mt-2 leading-snug">
-                  Códigos ICAO dos aeroportos quando a rede ADS-B registrou a perna do voo
-                  (nem sempre disponível).
+                  Origem e destino vêm da base ADSBDB quando o indicativo do voo é reconhecido.
+                  Voos sem cadastro ou indicativo genérico podem aparecer como “—”.
                 </p>
               </div>
 
