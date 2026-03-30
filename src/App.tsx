@@ -172,7 +172,7 @@ export default function App() {
             <Plane className="w-6 h-6 text-white" />
           </div>
           <div>
-            <h1 className="text-lg font-bold tracking-tight">AeroTrack BR</h1>
+            <h1 className="text-lg font-bold tracking-tight">X-Jet</h1>
             <p className="text-xs text-blue-400 font-mono uppercase tracking-widest">Tempo Real</p>
           </div>
         </div>
