@@ -1,21 +1,16 @@
-import { Suspense, useMemo } from "react";
+import { useMemo } from "react";
 import { Canvas } from "@react-three/fiber";
 import { ContactShadows, OrbitControls } from "@react-three/drei";
 import { motion } from "motion/react";
 import { X } from "lucide-react";
+import { classifyAircraftType } from "../lib/aircraftModel";
+import { AircraftGltfModel } from "./AircraftGltfModel";
 
-export function classifyAircraftType(
-  t: string | null | undefined
-): "narrow" | "wide" | "regional" {
-  if (!t) return "narrow";
-  const u = t.toUpperCase();
-  if (/A388|A35|A346|A343|B744|B748|B77|B78|A330|A332|A333/i.test(u))
-    return "wide";
-  if (/E1[45]|CRJ|DH8|AT7|B717|E70|E75|SF3/i.test(u)) return "regional";
-  return "narrow";
-}
-
-function AircraftMesh({ variant }: { variant: "narrow" | "wide" | "regional" }) {
+function AircraftMesh({
+  variant,
+}: {
+  variant: ReturnType<typeof classifyAircraftType>;
+}) {
   const { wing, fuse, len, tailW } = useMemo(() => {
     if (variant === "wide")
       return { wing: 2.85, fuse: 0.3, len: 2.25, tailW: 0.95 };
@@ -76,7 +71,7 @@ type Props = {
 };
 
 /**
- * Vista 3D estilizada (não é scan do avião real). Escala aproximada por categoria ICAO.
+ * Vista 3D: GLB (Cesium Air) com escala por categoria; fallback geométrico se falhar.
  */
 export default function Aircraft3DOverlay({
   aircraftType,
@@ -84,6 +79,10 @@ export default function Aircraft3DOverlay({
   onClose,
 }: Props) {
   const variant = classifyAircraftType(aircraftType);
+  const procedural = useMemo(
+    () => <AircraftMesh variant={variant} />,
+    [variant]
+  );
 
   return (
     <div className="pointer-events-none absolute inset-0 z-[985] flex items-center justify-center px-3">
@@ -118,16 +117,18 @@ export default function Aircraft3DOverlay({
             shadow-mapSize={[1024, 1024]}
           />
           <spotLight position={[-4, 4, 2]} intensity={0.32} angle={0.45} />
-          <Suspense fallback={null}>
-            <AircraftMesh variant={variant} />
-            <ContactShadows
-              position={[0, -0.92, 0]}
-              opacity={0.45}
-              scale={14}
-              blur={2.4}
-              far={5}
-            />
-          </Suspense>
+          <AircraftGltfModel
+            key={callsign}
+            aircraftType={aircraftType}
+            fallback={procedural}
+          />
+          <ContactShadows
+            position={[0, -0.92, 0]}
+            opacity={0.45}
+            scale={14}
+            blur={2.4}
+            far={5}
+          />
           <OrbitControls
             enablePan={false}
             minPolarAngle={0.35}
@@ -144,12 +145,15 @@ export default function Aircraft3DOverlay({
           </p>
           <p className="text-xs font-mono text-blue-300/90 truncate">{callsign}</p>
           {aircraftType ? (
-            <p className="text-[10px] text-amber-200/80 font-mono">
+            <p className="text-[10px] text-amber-200/80 font-mono leading-snug">
               Tipo {aircraftType.toUpperCase()}
+              <span className="block text-[9px] text-neutral-500 font-sans normal-case">
+                Modelo 3D ilustrativo (Cesium Air) · escala por categoria
+              </span>
             </p>
           ) : (
             <p className="text-[10px] text-neutral-500">
-              Modelo genérico (sem tipo ADS-B)
+              Sem tipo ADS-B · modelo ilustrativo
             </p>
           )}
         </div>
