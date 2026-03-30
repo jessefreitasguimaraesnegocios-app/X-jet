@@ -18,6 +18,16 @@ export interface FlightState {
   positionSource: number;
 }
 
+/** Aeroporto / aeródromo (OpenStreetMap) para o mapa. */
+export interface AirportPoi {
+  id: string;
+  name: string;
+  lat: number;
+  lon: number;
+  iata?: string;
+  icao?: string;
+}
+
 export interface FlightDetails {
   icao24: string;
   model?: string;

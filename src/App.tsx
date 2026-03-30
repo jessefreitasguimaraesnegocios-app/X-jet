@@ -27,6 +27,8 @@ import {
   LocateFixed,
   Crosshair,
   Mic,
+  Sun,
+  Moon,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -35,11 +37,15 @@ import {
   filterFlightsWithinRadiusKm,
 } from "./services/flightService";
 import {
+  fetchAirports,
+  filterAirportsWithinRadiusKm,
+} from "./services/airportService";
+import {
   fetchFlightRoute,
   type FlightRouteInfo,
 } from "./services/flightRouteService";
 import { speakText } from "./services/ttsService";
-import type { FlightState } from "./types";
+import type { AirportPoi, FlightState } from "./types";
 import { cn } from "./lib/utils";
 import { buildFlightSpeechBriefing } from "./lib/flightSpeech";
 import { useLerpedLatLng } from "./hooks/useLerpedLatLng";
@@ -58,12 +64,41 @@ L.Icon.Default.mergeOptions({
 
 const PLANE_SVG = `<svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M21 16v-2l-8-5V3.5c0-.83-.67-1.5-1.5-1.5S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z"/></svg>`;
 
-function planeIcon(deg: number, selected: boolean) {
+function planeIcon(deg: number, selected: boolean, isLight: boolean) {
+  const base = isLight ? "#0369a1" : "#3b82f6";
+  const sel = "#dc2626";
+  const c = selected ? sel : base;
   return L.divIcon({
-    html: `<div style="transform:rotate(${deg}deg);color:${selected ? "#ef4444" : "#3b82f6"};width:32px;height:32px">${PLANE_SVG}</div>`,
+    html: `<div style="transform:rotate(${deg}deg);color:${c};width:32px;height:32px">${PLANE_SVG}</div>`,
     className: "custom-plane-icon",
     iconSize: [32, 32],
     iconAnchor: [16, 16],
+  });
+}
+
+const AIRPORT_PIN_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M21 16v-2l-8-5V3.5c0-.83-.67-1.5-1.5-1.5S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z"/></svg>`;
+
+function airportMapIcon(isLight: boolean) {
+  const bg = isLight
+    ? "linear-gradient(155deg,#fffdfb 0%,#fde8d4 40%,#fbbf77 100%)"
+    : "linear-gradient(155deg,#292524 0%,#78350f 50%,#b45309 100%)";
+  const border = isLight ? "rgba(146,64,14,0.4)" : "rgba(251,191,36,0.5)";
+  const fg = isLight ? "#9a3412" : "#fef3c7";
+  return L.divIcon({
+    html: `<div style="width:28px;height:28px;border-radius:10px;background:${bg};border:2px solid ${border};box-shadow:0 4px 14px rgba(0,0,0,0.2),inset 0 1px 0 rgba(255,255,255,0.35);display:flex;align-items:center;justify-content:center;color:${fg}">${AIRPORT_PIN_SVG}</div>`,
+    className: "xjet-airport-icon",
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+  });
+}
+
+function userPositionIcon(isLight: boolean) {
+  const fill = isLight ? "#0284c7" : "#3b82f6";
+  return L.divIcon({
+    html: `<div style="width:12px;height:12px;background:${fill};border-radius:9999px;border:2px solid #fff;box-shadow:0 0 14px ${fill}99"></div>`,
+    className: "",
+    iconSize: [12, 12],
+    iconAnchor: [6, 6],
   });
 }
 
@@ -120,6 +155,17 @@ function readStoredBool(key: string, defaultVal: boolean): boolean {
 
 const LS_AUTO_VOICE = "xjet_auto_voice";
 const LS_FOLLOW_PLANE = "xjet_follow_plane";
+const LS_THEME = "xjet_theme";
+
+function readStoredLight(): boolean {
+  try {
+    const v = localStorage.getItem(LS_THEME);
+    if (v === null) return false;
+    return v === "light";
+  } catch {
+    return false;
+  }
+}
 
 function useSheetHeights() {
   const [heights, setHeights] = useState({
@@ -179,6 +225,8 @@ export default function App() {
   );
   const [show3D, setShow3D] = useState(true);
   const [sheetSnap, setSheetSnap] = useState<0 | 1 | 2>(1);
+  const [isLight, setIsLight] = useState(() => readStoredLight());
+  const [airportsPool, setAirportsPool] = useState<AirportPoi[]>([]);
   const sheetHeights = useSheetHeights();
 
   const centerRef = useRef(center);
@@ -219,6 +267,16 @@ export default function App() {
       radiusKm
     );
   }, [flightsPool, center, radiusKm]);
+
+  const displayAirports = useMemo(() => {
+    if (!center) return [];
+    return filterAirportsWithinRadiusKm(
+      airportsPool,
+      center[0],
+      center[1],
+      radiusKm
+    );
+  }, [airportsPool, center, radiusKm]);
 
   const autoVoiceRef = useRef(autoVoice);
   autoVoiceRef.current = autoVoice;
@@ -351,6 +409,13 @@ export default function App() {
         setFlightsPool(list);
         loadedRadiusRef.current = fetchR;
         setUpdated(new Date());
+        void fetchAirports(b, ac.signal)
+          .then((ap) => {
+            if (!ac.signal.aborted) setAirportsPool(ap);
+          })
+          .catch(() => {
+            if (!ac.signal.aborted) setAirportsPool([]);
+          });
       } catch (e: unknown) {
         if (ac.signal.aborted) return;
         const msg =
@@ -479,6 +544,7 @@ export default function App() {
     loadedRadiusRef.current = 0;
     flightsPoolRef.current = [];
     setFlightsPool([]);
+    setAirportsPool([]);
   }, [centerKey]);
 
   useEffect(() => {
@@ -610,23 +676,57 @@ export default function App() {
       : 0;
 
   return (
-    <div className="relative w-full min-h-[100dvh] h-[100dvh] bg-neutral-950 text-white overflow-hidden font-sans">
+    <div
+      className={cn(
+        "relative xjet-app w-full min-h-[100dvh] h-[100dvh] overflow-hidden font-sans antialiased",
+        isLight
+          ? "xjet-app--light bg-[linear-gradient(165deg,#faf8f5_0%,#efe9e1_42%,#e3dbd0_100%)] text-stone-900"
+          : "bg-neutral-950 text-white"
+      )}
+    >
       <header
-        className="absolute top-0 inset-x-0 z-[1000] flex items-center justify-between px-3 gap-2 bg-gradient-to-b from-black/90 to-transparent"
+        className={cn(
+          "absolute top-0 inset-x-0 z-[1000] flex items-center justify-between px-3 gap-2",
+          isLight
+            ? "bg-gradient-to-b from-[#fffdf9]/95 via-stone-100/80 to-transparent border-b border-stone-400/25 shadow-[inset_0_-1px_0_rgba(255,255,255,0.65)]"
+            : "bg-gradient-to-b from-black/90 to-transparent"
+        )}
         style={{ paddingTop: "max(0.6rem, env(safe-area-inset-top))" }}
       >
         <div className="flex items-center gap-2 min-w-0">
-          <div className="shrink-0 w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center shadow-lg shadow-blue-500/30">
+          <div
+            className={cn(
+              "shrink-0 w-10 h-10 rounded-full flex items-center justify-center shadow-lg text-white",
+              isLight
+                ? "bg-gradient-to-br from-sky-500 via-sky-600 to-sky-800 shadow-sky-600/35"
+                : "bg-blue-600 shadow-blue-500/30"
+            )}
+          >
             <Plane className="w-5 h-5" />
           </div>
           <div className="min-w-0">
-            <h1 className="text-base font-bold truncate">X-Jet</h1>
-            <p className="text-[10px] text-blue-400 font-mono uppercase">
+            <h1 className="text-base font-bold truncate tracking-tight">X-Jet</h1>
+            <p
+              className={cn(
+                "text-[10px] font-mono uppercase",
+                isLight ? "text-sky-700" : "text-blue-400"
+              )}
+            >
               Tempo real
             </p>
             {center && (
-              <p className="flex items-center gap-1.5 mt-0.5 text-[10px] font-mono tabular-nums text-emerald-400/95">
-                <span className="uppercase tracking-wide text-neutral-500 font-bold">
+              <p
+                className={cn(
+                  "flex items-center gap-1.5 mt-0.5 text-[10px] font-mono tabular-nums",
+                  isLight ? "text-emerald-800" : "text-emerald-400/95"
+                )}
+              >
+                <span
+                  className={cn(
+                    "uppercase tracking-wide font-bold",
+                    isLight ? "text-stone-500" : "text-neutral-500"
+                  )}
+                >
                   Total
                 </span>
                 <Plane className="w-3.5 h-3.5 shrink-0" aria-hidden />
@@ -636,17 +736,60 @@ export default function App() {
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          <div className="flex flex-col items-end text-[9px] text-neutral-400 mr-1 max-w-[4.5rem]">
+          <div
+            className={cn(
+              "flex flex-col items-end text-[9px] mr-1 max-w-[4.5rem]",
+              isLight ? "text-stone-500" : "text-neutral-400"
+            )}
+          >
             <span className="uppercase font-bold">Atualizado</span>
-            <span className="font-mono text-white text-[10px]">
+            <span
+              className={cn(
+                "font-mono text-[10px]",
+                isLight ? "text-stone-800" : "text-white"
+              )}
+            >
               {updated.toLocaleTimeString()}
             </span>
           </div>
           <button
             type="button"
+            onClick={() => {
+              setIsLight((v) => {
+                const n = !v;
+                try {
+                  localStorage.setItem(LS_THEME, n ? "light" : "dark");
+                } catch {
+                  /* ignore */
+                }
+                return n;
+              });
+            }}
+            className={cn(
+              "min-h-11 min-w-11 rounded-full flex items-center justify-center active:scale-95 touch-manipulation border",
+              isLight
+                ? "bg-amber-100/95 text-amber-900 border-amber-300/55 shadow-sm"
+                : "bg-white/10 text-amber-300 border-white/15"
+            )}
+            title={isLight ? "Modo escuro" : "Modo claro"}
+            aria-label={isLight ? "Ativar modo escuro" : "Ativar modo claro"}
+          >
+            {isLight ? (
+              <Moon className="w-5 h-5" strokeWidth={2.25} />
+            ) : (
+              <Sun className="w-5 h-5" strokeWidth={2.25} />
+            )}
+          </button>
+          <button
+            type="button"
             onClick={() => requestCurrentLocation()}
             disabled={geoLoading}
-            className="min-h-9 min-w-9 sm:min-h-11 sm:min-w-11 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center active:scale-95 disabled:opacity-50 touch-manipulation border border-emerald-500/30"
+            className={cn(
+              "min-h-9 min-w-9 sm:min-h-11 sm:min-w-11 rounded-full flex items-center justify-center active:scale-95 disabled:opacity-50 touch-manipulation border",
+              isLight
+                ? "bg-emerald-100/90 text-emerald-800 border-emerald-300/50 shadow-sm"
+                : "bg-emerald-500/20 text-emerald-400 border-emerald-500/30"
+            )}
             title="Onde estou agora"
             aria-label="Atualizar minha localização no mapa"
           >
@@ -660,7 +803,12 @@ export default function App() {
             type="button"
             onClick={() => void loadFlights({ mode: "refresh" })}
             disabled={loading || !center}
-            className="min-h-11 min-w-11 rounded-full bg-white/10 flex items-center justify-center active:scale-95 disabled:opacity-40 touch-manipulation"
+            className={cn(
+              "min-h-11 min-w-11 rounded-full flex items-center justify-center active:scale-95 disabled:opacity-40 touch-manipulation border",
+              isLight
+                ? "bg-white/85 text-stone-700 border-stone-300/60 shadow-sm"
+                : "bg-white/10 border-transparent"
+            )}
             aria-label="Atualizar"
           >
             <Loader2 className={cn("w-5 h-5", loading && "animate-spin")} />
@@ -669,8 +817,12 @@ export default function App() {
             type="button"
             onClick={() => void toggleAr()}
             className={cn(
-              "min-h-11 min-w-11 rounded-full flex items-center justify-center active:scale-95 touch-manipulation",
-              ar ? "bg-red-600" : "bg-white/10"
+              "min-h-11 min-w-11 rounded-full flex items-center justify-center active:scale-95 touch-manipulation border",
+              ar
+                ? "bg-red-600 text-white border-red-500"
+                : isLight
+                  ? "bg-stone-200/90 text-stone-800 border-stone-400/40"
+                  : "bg-white/10 border-transparent"
             )}
             aria-label="Bússola"
           >
@@ -704,7 +856,12 @@ export default function App() {
                 ? "max(8.5rem, env(safe-area-inset-top) + 6.5rem)"
                 : "max(4.5rem, env(safe-area-inset-top) + 3rem)",
             }}
-            className="absolute left-1/2 -translate-x-1/2 z-[1100] max-w-[calc(100vw-1.5rem)] px-3 py-2 rounded-xl bg-red-600/95 text-[11px] font-semibold leading-snug text-center"
+            className={cn(
+              "absolute left-1/2 -translate-x-1/2 z-[1100] max-w-[calc(100vw-1.5rem)] px-3 py-2 rounded-xl text-[11px] font-semibold leading-snug text-center",
+              isLight
+                ? "bg-red-600 text-white shadow-md"
+                : "bg-red-600/95"
+            )}
           >
             {err}
           </motion.div>
@@ -712,9 +869,24 @@ export default function App() {
       </AnimatePresence>
 
       {!center && (
-        <div className="absolute inset-0 z-[500] flex flex-col items-center justify-center bg-neutral-950 gap-3">
-          <Loader2 className="w-10 h-10 text-blue-500 animate-spin" />
-          <p className="text-xs text-neutral-500 uppercase tracking-widest">
+        <div
+          className={cn(
+            "absolute inset-0 z-[500] flex flex-col items-center justify-center gap-3",
+            isLight ? "bg-[#ebe6df]" : "bg-neutral-950"
+          )}
+        >
+          <Loader2
+            className={cn(
+              "w-10 h-10 animate-spin",
+              isLight ? "text-sky-600" : "text-blue-500"
+            )}
+          />
+          <p
+            className={cn(
+              "text-xs uppercase tracking-widest",
+              isLight ? "text-stone-500" : "text-neutral-500"
+            )}
+          >
             Obtendo posição…
           </p>
         </div>
@@ -725,15 +897,26 @@ export default function App() {
           <MapContainer
             center={center}
             zoom={8}
-            className="w-full h-full grayscale-[0.15] brightness-[0.85] contrast-[1.15]"
+            className={cn(
+              "w-full h-full",
+              isLight
+                ? "brightness-[1.02] contrast-[1.02] saturate-[0.92]"
+                : "grayscale-[0.15] brightness-[0.85] contrast-[1.15]"
+            )}
             zoomControl={false}
             scrollWheelZoom
             dragging
             touchZoom
           >
             <TileLayer
-              attribution='&copy; OSM &copy; CARTO'
-              url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+              attribution={
+                isLight ? "&copy; OSM &copy; CARTO Voyager" : "&copy; OSM &copy; CARTO"
+              }
+              url={
+                isLight
+                  ? "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+                  : "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+              }
             />
             <MapCenter
               c={center}
@@ -743,27 +926,47 @@ export default function App() {
               pos={pickTargetPos}
               enabled={Boolean(followPlane && pick && pickTargetPos)}
             />
-            <Marker
-              position={center}
-              icon={L.divIcon({
-                html: `<div class="w-3 h-3 bg-blue-500 rounded-full border-2 border-white shadow-[0_0_12px_#3b82f6]"></div>`,
-                className: "",
-                iconSize: [12, 12],
-                iconAnchor: [6, 6],
-              })}
-            >
+            <Marker position={center} icon={userPositionIcon(isLight)}>
               <Popup>Você</Popup>
             </Marker>
             <Circle
               center={center}
               radius={radiusKm * 1000}
-              pathOptions={{
-                color: "#3b82f6",
-                weight: 1,
-                fillColor: "#3b82f6",
-                fillOpacity: 0.06,
-              }}
+              pathOptions={
+                isLight
+                  ? {
+                      color: "#0284c7",
+                      weight: 2,
+                      fillColor: "#0ea5e9",
+                      fillOpacity: 0.09,
+                    }
+                  : {
+                      color: "#3b82f6",
+                      weight: 1,
+                      fillColor: "#3b82f6",
+                      fillOpacity: 0.06,
+                    }
+              }
             />
+            {displayAirports.map((a) => (
+              <Marker
+                key={a.id}
+                position={[a.lat, a.lon]}
+                icon={airportMapIcon(isLight)}
+              >
+                <Popup>
+                  <div className="xjet-popup-inner p-1 min-w-[8rem]">
+                    <p className="font-bold leading-tight">{a.name}</p>
+                    {(a.iata || a.icao) && (
+                      <p className="text-xs opacity-80 font-mono mt-1">
+                        {[a.iata, a.icao].filter(Boolean).join(" · ")}
+                      </p>
+                    )}
+                    <p className="text-[10px] opacity-70 mt-1">Aeroporto (OSM)</p>
+                  </div>
+                </Popup>
+              </Marker>
+            ))}
             {displayFlights
               .filter((f) => f.icao24 !== pick?.icao24)
               .map(
@@ -773,15 +976,13 @@ export default function App() {
                     <Marker
                       key={f.icao24}
                       position={[f.latitude, f.longitude]}
-                      icon={planeIcon(f.trueTrack ?? 0, false)}
+                      icon={planeIcon(f.trueTrack ?? 0, false, isLight)}
                       eventHandlers={{ click: () => onPick(f) }}
                     >
                       <Popup>
-                        <div className="text-neutral-900 p-1">
+                        <div className="p-1 min-w-[6rem]">
                           <p className="font-bold">{f.callsign}</p>
-                          <p className="text-xs text-neutral-500">
-                            {f.originCountry}
-                          </p>
+                          <p className="text-xs opacity-75">{f.originCountry}</p>
                         </div>
                       </Popup>
                     </Marker>
@@ -794,20 +995,15 @@ export default function App() {
                 <Marker
                   key={`pick-${pick.icao24}`}
                   position={pickAnimPos ?? pickTargetPos}
-                  icon={planeIcon(
-                    pickLive.trueTrack ?? 0,
-                    true
-                  )}
+                  icon={planeIcon(pickLive.trueTrack ?? 0, true, isLight)}
                   eventHandlers={{
                     click: () => onPick(pickLive),
                   }}
                 >
                   <Popup>
-                    <div className="text-neutral-900 p-1">
+                    <div className="p-1 min-w-[6rem]">
                       <p className="font-bold">{pickLive.callsign}</p>
-                      <p className="text-xs text-neutral-500">
-                        {pickLive.originCountry}
-                      </p>
+                      <p className="text-xs opacity-75">{pickLive.originCountry}</p>
                     </div>
                   </Popup>
                 </Marker>
@@ -833,9 +1029,24 @@ export default function App() {
       )}
 
       {loading && (
-        <div className="absolute inset-0 z-[2000] bg-black/75 flex flex-col items-center justify-center gap-3">
-          <Loader2 className="w-11 h-11 text-blue-500 animate-spin" />
-          <p className="text-sm tracking-widest uppercase text-neutral-300">
+        <div
+          className={cn(
+            "absolute inset-0 z-[2000] flex flex-col items-center justify-center gap-3",
+            isLight ? "bg-stone-900/35 backdrop-blur-[2px]" : "bg-black/75"
+          )}
+        >
+          <Loader2
+            className={cn(
+              "w-11 h-11 animate-spin",
+              isLight ? "text-sky-600" : "text-blue-500"
+            )}
+          />
+          <p
+            className={cn(
+              "text-sm tracking-widest uppercase",
+              isLight ? "text-stone-700" : "text-neutral-300"
+            )}
+          >
             Carregando voos…
           </p>
         </div>
@@ -861,7 +1072,12 @@ export default function App() {
                       : sheetHeights.full,
               }}
               transition={{ type: "spring", damping: 36, stiffness: 420 }}
-              className="pointer-events-auto flex flex-col min-h-0 rounded-t-3xl bg-neutral-900/97 border-t border-white/10 shadow-2xl overflow-hidden w-full box-border"
+              className={cn(
+                "pointer-events-auto flex flex-col min-h-0 rounded-t-3xl border-t shadow-2xl overflow-hidden w-full box-border",
+                isLight
+                  ? "bg-[#faf7f2]/[0.97] border-stone-300/50 text-stone-900"
+                  : "bg-neutral-900/97 border-white/10"
+              )}
               style={{
                 paddingBottom: "max(1rem, env(safe-area-inset-bottom))",
               }}
@@ -890,22 +1106,47 @@ export default function App() {
                 className="shrink-0 flex flex-col items-center pt-2 pb-1 cursor-grab active:cursor-grabbing touch-manipulation select-none"
                 style={{ touchAction: "none" }}
               >
-                <div className="w-12 h-1.5 rounded-full bg-white/35 mb-1" />
-                <p className="text-[9px] text-neutral-500 uppercase tracking-widest">
+                <div
+                  className={cn(
+                    "w-12 h-1.5 rounded-full mb-1",
+                    isLight ? "bg-stone-400/45" : "bg-white/35"
+                  )}
+                />
+                <p
+                  className={cn(
+                    "text-[9px] uppercase tracking-widest",
+                    isLight ? "text-stone-500" : "text-neutral-500"
+                  )}
+                >
                   Arraste ou toque ·{" "}
                   {sheetSnap === 0 ? "Mínimo" : sheetSnap === 1 ? "Médio" : "Cheio"}
                 </p>
               </motion.div>
 
-              <div className="shrink-0 flex justify-between gap-3 px-4 pb-2 border-b border-white/5">
+              <div
+                className={cn(
+                  "shrink-0 flex justify-between gap-3 px-4 pb-2 border-b",
+                  isLight ? "border-stone-200/80" : "border-white/5"
+                )}
+              >
                 <div className="min-w-0">
                   <h2 className="text-xl sm:text-2xl font-black truncate">
                     {pickLive?.callsign ?? pick.callsign}
                   </h2>
-                  <p className="text-blue-400 text-[11px] font-mono uppercase truncate">
+                  <p
+                    className={cn(
+                      "text-[11px] font-mono uppercase truncate",
+                      isLight ? "text-sky-700" : "text-blue-400"
+                    )}
+                  >
                     {pickLive?.originCountry ?? pick.originCountry}
                     {(pickLive?.aircraftType ?? pick.aircraftType) && (
-                      <span className="text-neutral-500 ml-2">
+                      <span
+                        className={cn(
+                          "ml-2",
+                          isLight ? "text-stone-500" : "text-neutral-500"
+                        )}
+                      >
                         · {pickLive?.aircraftType ?? pick.aircraftType}
                       </span>
                     )}
@@ -920,7 +1161,12 @@ export default function App() {
                     setTrail([]);
                     trailPickRef.current = null;
                   }}
-                  className="shrink-0 w-11 h-11 rounded-full bg-white/10 flex items-center justify-center active:scale-95"
+                  className={cn(
+                    "shrink-0 w-11 h-11 rounded-full flex items-center justify-center active:scale-95 border",
+                    isLight
+                      ? "bg-stone-200/80 border-stone-300/60 text-stone-800"
+                      : "bg-white/10 border-transparent"
+                  )}
                   aria-label="Fechar"
                 >
                   <X className="w-6 h-6" />
@@ -928,16 +1174,31 @@ export default function App() {
               </div>
 
               <div className="overflow-y-auto overscroll-contain px-4 pt-3 flex-1 min-h-0">
-              <div className="rounded-xl bg-white/5 border border-white/10 divide-y divide-white/10 mb-4">
+              <div
+                className={cn(
+                  "rounded-xl border mb-4 divide-y",
+                  isLight
+                    ? "bg-white/60 border-stone-300/50 divide-stone-200/90"
+                    : "bg-white/5 border-white/10 divide-white/10"
+                )}
+              >
                 <label className="flex items-center justify-between gap-3 px-3 py-3 cursor-pointer touch-manipulation">
                   <span className="flex items-center gap-2 text-sm min-w-0">
                     <Crosshair
-                      className="w-4 h-4 shrink-0 text-emerald-400"
+                      className={cn(
+                        "w-4 h-4 shrink-0",
+                        isLight ? "text-emerald-700" : "text-emerald-400"
+                      )}
                       strokeWidth={2.25}
                     />
                     <span className="leading-tight">
                       Seguir avião no mapa
-                      <span className="block text-[10px] text-neutral-500 font-normal">
+                      <span
+                        className={cn(
+                          "block text-[10px] font-normal",
+                          isLight ? "text-stone-500" : "text-neutral-500"
+                        )}
+                      >
                         Centraliza quando chegam novas posições
                       </span>
                     </span>
@@ -959,7 +1220,11 @@ export default function App() {
                   <span
                     className={cn(
                       "shrink-0 w-11 h-6 rounded-full relative transition-colors pointer-events-none",
-                      followPlane ? "bg-emerald-600" : "bg-white/20"
+                      followPlane
+                        ? "bg-emerald-600"
+                        : isLight
+                          ? "bg-stone-300/80"
+                          : "bg-white/20"
                     )}
                   >
                     <span
@@ -973,12 +1238,20 @@ export default function App() {
                 <label className="flex items-center justify-between gap-3 px-3 py-3 cursor-pointer touch-manipulation">
                   <span className="flex items-center gap-2 text-sm min-w-0">
                     <Mic
-                      className="w-4 h-4 shrink-0 text-blue-400"
+                      className={cn(
+                        "w-4 h-4 shrink-0",
+                        isLight ? "text-sky-600" : "text-blue-400"
+                      )}
                       strokeWidth={2.25}
                     />
                     <span className="leading-tight">
                       Narração ao tocar
-                      <span className="block text-[10px] text-neutral-500 font-normal">
+                      <span
+                        className={cn(
+                          "block text-[10px] font-normal",
+                          isLight ? "text-stone-500" : "text-neutral-500"
+                        )}
+                      >
                         Ouvir continua disponível abaixo
                       </span>
                     </span>
@@ -1000,7 +1273,11 @@ export default function App() {
                   <span
                     className={cn(
                       "shrink-0 w-11 h-6 rounded-full relative transition-colors pointer-events-none",
-                      autoVoice ? "bg-blue-600" : "bg-white/20"
+                      autoVoice
+                        ? "bg-blue-600"
+                        : isLight
+                          ? "bg-stone-300/80"
+                          : "bg-white/20"
                     )}
                   >
                     <span
@@ -1014,12 +1291,20 @@ export default function App() {
                 <label className="flex items-center justify-between gap-3 px-3 py-3 cursor-pointer touch-manipulation">
                   <span className="flex items-center gap-2 text-sm min-w-0">
                     <Plane
-                      className="w-4 h-4 shrink-0 text-cyan-300"
+                      className={cn(
+                        "w-4 h-4 shrink-0",
+                        isLight ? "text-cyan-700" : "text-cyan-300"
+                      )}
                       strokeWidth={2.25}
                     />
                     <span className="leading-tight">
                       Modelo 3D no mapa
-                      <span className="block text-[10px] text-neutral-500 font-normal">
+                      <span
+                        className={cn(
+                          "block text-[10px] font-normal",
+                          isLight ? "text-stone-500" : "text-neutral-500"
+                        )}
+                      >
                         Arraste a janela e feche quando quiser
                       </span>
                     </span>
@@ -1033,7 +1318,11 @@ export default function App() {
                   <span
                     className={cn(
                       "shrink-0 w-11 h-6 rounded-full relative transition-colors pointer-events-none",
-                      show3D ? "bg-cyan-600" : "bg-white/20"
+                      show3D
+                        ? "bg-cyan-600"
+                        : isLight
+                          ? "bg-stone-300/80"
+                          : "bg-white/20"
                     )}
                   >
                     <span
@@ -1046,16 +1335,38 @@ export default function App() {
                 </label>
               </div>
 
-              <div className="rounded-xl bg-white/5 border border-white/10 p-3 mb-4">
-                <p className="text-[10px] text-neutral-500 uppercase font-bold mb-2">
+              <div
+                className={cn(
+                  "rounded-xl border p-3 mb-4",
+                  isLight
+                    ? "bg-white/55 border-stone-300/50"
+                    : "bg-white/5 border-white/10"
+                )}
+              >
+                <p
+                  className={cn(
+                    "text-[10px] uppercase font-bold mb-2",
+                    isLight ? "text-stone-500" : "text-neutral-500"
+                  )}
+                >
                   Rota (ADSBDB pelo indicativo)
                 </p>
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <div>
-                    <span className="text-[10px] text-neutral-500 uppercase font-bold">
+                    <span
+                      className={cn(
+                        "text-[10px] uppercase font-bold",
+                        isLight ? "text-stone-500" : "text-neutral-500"
+                      )}
+                    >
                       De
                     </span>
-                    <p className="font-mono text-amber-200/95 flex items-center gap-1 min-h-[1.25rem]">
+                    <p
+                      className={cn(
+                        "font-mono flex items-center gap-1 min-h-[1.25rem]",
+                        isLight ? "text-amber-900" : "text-amber-200/95"
+                      )}
+                    >
                       {routeLoading ? (
                         <Loader2 className="w-4 h-4 animate-spin text-blue-400" />
                       ) : (
@@ -1063,16 +1374,31 @@ export default function App() {
                       )}
                     </p>
                     {!routeLoading && routeInfo?.departureName && (
-                      <p className="text-[11px] text-neutral-400 leading-snug mt-0.5 line-clamp-2">
+                      <p
+                        className={cn(
+                          "text-[11px] leading-snug mt-0.5 line-clamp-2",
+                          isLight ? "text-stone-600" : "text-neutral-400"
+                        )}
+                      >
                         {routeInfo.departureName}
                       </p>
                     )}
                   </div>
                   <div>
-                    <span className="text-[10px] text-neutral-500 uppercase font-bold">
+                    <span
+                      className={cn(
+                        "text-[10px] uppercase font-bold",
+                        isLight ? "text-stone-500" : "text-neutral-500"
+                      )}
+                    >
                       Para
                     </span>
-                    <p className="font-mono text-emerald-200/95 flex items-center gap-1 min-h-[1.25rem]">
+                    <p
+                      className={cn(
+                        "font-mono flex items-center gap-1 min-h-[1.25rem]",
+                        isLight ? "text-emerald-900" : "text-emerald-200/95"
+                      )}
+                    >
                       {routeLoading ? (
                         <Loader2 className="w-4 h-4 animate-spin text-blue-400" />
                       ) : (
@@ -1080,13 +1406,23 @@ export default function App() {
                       )}
                     </p>
                     {!routeLoading && routeInfo?.arrivalName && (
-                      <p className="text-[11px] text-neutral-400 leading-snug mt-0.5 line-clamp-2">
+                      <p
+                        className={cn(
+                          "text-[11px] leading-snug mt-0.5 line-clamp-2",
+                          isLight ? "text-stone-600" : "text-neutral-400"
+                        )}
+                      >
                         {routeInfo.arrivalName}
                       </p>
                     )}
                   </div>
                 </div>
-                <p className="text-[9px] text-neutral-500 mt-2 leading-snug">
+                <p
+                  className={cn(
+                    "text-[9px] mt-2 leading-snug",
+                    isLight ? "text-stone-500" : "text-neutral-500"
+                  )}
+                >
                   Origem e destino vêm da base ADSBDB quando o indicativo do voo é reconhecido.
                   Voos sem cadastro ou indicativo genérico podem aparecer como “—”.
                 </p>
@@ -1094,7 +1430,12 @@ export default function App() {
 
               <div className="grid grid-cols-2 gap-3 text-sm mb-4">
                 <div>
-                  <span className="text-[10px] text-neutral-500 uppercase font-bold">
+                  <span
+                    className={cn(
+                      "text-[10px] uppercase font-bold",
+                      isLight ? "text-stone-500" : "text-neutral-500"
+                    )}
+                  >
                     Altitude
                   </span>
                   <p>
@@ -1102,7 +1443,12 @@ export default function App() {
                   </p>
                 </div>
                 <div>
-                  <span className="text-[10px] text-neutral-500 uppercase font-bold">
+                  <span
+                    className={cn(
+                      "text-[10px] uppercase font-bold",
+                      isLight ? "text-stone-500" : "text-neutral-500"
+                    )}
+                  >
                     Velocidade
                   </span>
                   <p>
@@ -1132,13 +1478,21 @@ export default function App() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="absolute inset-0 z-[1500] bg-black/50 pointer-events-none flex flex-col items-center justify-center px-4"
+            className={cn(
+              "absolute inset-0 z-[1500] pointer-events-none flex flex-col items-center justify-center px-4",
+              isLight ? "bg-stone-900/25" : "bg-black/50"
+            )}
             style={{
               paddingBottom: "max(1rem, env(safe-area-inset-bottom))",
             }}
           >
             <div
-              className="relative rounded-full border-2 border-white/25 flex items-center justify-center w-[min(17rem,82vw)] h-[min(17rem,82vw)] md:w-72 md:h-72"
+              className={cn(
+                "relative rounded-full border-2 flex items-center justify-center w-[min(17rem,82vw)] h-[min(17rem,82vw)] md:w-72 md:h-72",
+                isLight
+                  ? "border-stone-400/50 bg-white/20 shadow-inner"
+                  : "border-white/25"
+              )}
             >
               <span className="absolute top-1 left-1/2 -translate-x-1/2 text-red-500 font-black text-sm">
                 N
@@ -1164,7 +1518,12 @@ export default function App() {
               )}
               <div className="w-0.5 h-16 bg-gradient-to-t from-transparent to-red-500 rounded-full" />
             </div>
-            <p className="mt-6 text-lg font-bold">
+            <p
+              className={cn(
+                "mt-6 text-lg font-bold drop-shadow-sm",
+                isLight ? "text-stone-900" : "text-white"
+              )}
+            >
               {pick ? `Apontando para ${pick.callsign}` : "Apontando para o Norte"}
             </p>
           </motion.div>
@@ -1175,13 +1534,42 @@ export default function App() {
         <div
           className="absolute left-0 right-0 z-[1000] bottom-[max(0.6rem,env(safe-area-inset-bottom))] md:left-6 md:right-auto md:bottom-6 md:w-52"
         >
-          <div className="mx-3 md:mx-0 rounded-2xl border border-white/10 bg-neutral-900/95 px-4 py-3 backdrop-blur-md">
-            <div className="flex justify-between text-[10px] uppercase font-bold text-neutral-500 mb-1">
+          <div
+            className={cn(
+              "mx-3 md:mx-0 rounded-2xl border px-4 py-3 backdrop-blur-md shadow-lg",
+              isLight
+                ? "border-stone-300/60 bg-[#fffcf7]/90 shadow-stone-400/15"
+                : "border-white/10 bg-neutral-900/95"
+            )}
+          >
+            <div
+              className={cn(
+                "flex justify-between text-[10px] uppercase font-bold mb-1",
+                isLight ? "text-stone-500" : "text-neutral-500"
+              )}
+            >
               <span>Raio</span>
-              <span className="text-blue-400 font-mono">{radiusKm} km</span>
+              <span
+                className={cn(
+                  "font-mono",
+                  isLight ? "text-sky-700" : "text-blue-400"
+                )}
+              >
+                {radiusKm} km
+              </span>
             </div>
-            <div className="flex items-center gap-1.5 mb-2 text-[10px] font-mono tabular-nums text-emerald-400">
-              <span className="uppercase tracking-wide text-neutral-500 font-bold">
+            <div
+              className={cn(
+                "flex items-center gap-1.5 mb-2 text-[10px] font-mono tabular-nums",
+                isLight ? "text-emerald-800" : "text-emerald-400"
+              )}
+            >
+              <span
+                className={cn(
+                  "uppercase tracking-wide font-bold",
+                  isLight ? "text-stone-500" : "text-neutral-500"
+                )}
+              >
                 Total
               </span>
               <Plane className="w-3.5 h-3.5 shrink-0" aria-hidden />
@@ -1193,7 +1581,10 @@ export default function App() {
               max={500}
               value={radiusKm}
               onChange={(e) => setRadiusKm(+e.target.value)}
-              className="w-full h-2 accent-blue-500 touch-manipulation"
+              className={cn(
+                "w-full h-2 touch-manipulation xjet-range",
+                isLight ? "accent-sky-600" : "accent-blue-500"
+              )}
             />
           </div>
         </div>

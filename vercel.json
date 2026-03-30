@@ -6,6 +6,9 @@
     },
     "api/flight-route.js": {
       "maxDuration": 25
+    },
+    "api/airports.js": {
+      "maxDuration": 60
     }
   }
 }

@@ -86,6 +86,30 @@ export default defineConfig({
               return;
             }
 
+            if (pathname === '/api/airports') {
+              try {
+                const {fetchAirportsFromOverpass} = await import('./api/airportsOverpass.mjs');
+                const parsed = parseUrl(raw, true);
+                const bounds = parseBoundsFromQuery(parsed.query ?? {});
+                if (!bounds) {
+                  res.statusCode = 400;
+                  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                  res.end(JSON.stringify({error: 'invalid_bounds'}));
+                  return;
+                }
+                const airports = await fetchAirportsFromOverpass(bounds);
+                res.statusCode = 200;
+                res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                res.end(JSON.stringify({airports}));
+              } catch (e) {
+                console.error('[vite /api/airports]', e);
+                res.statusCode = 500;
+                res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                res.end(JSON.stringify({error: 'server_error'}));
+              }
+              return;
+            }
+
             next();
           });
         },
