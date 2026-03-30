@@ -1,13 +1,31 @@
 import { FlightState } from "../types";
 
-function flightsUrl(bounds: {
+function boundsQuery(bounds: {
   lamin: number;
   lomin: number;
   lamax: number;
   lomax: number;
 }): string {
   const { lamin, lomin, lamax, lomax } = bounds;
-  const qs = `lamin=${lamin}&lomin=${lomin}&lamax=${lamax}&lomax=${lomax}`;
+  return `lamin=${lamin}&lomin=${lomin}&lamax=${lamax}&lomax=${lomax}`;
+}
+
+function directOpenSkyUrl(bounds: {
+  lamin: number;
+  lomin: number;
+  lamax: number;
+  lomax: number;
+}): string {
+  return `https://opensky-network.org/api/states/all?${boundsQuery(bounds)}`;
+}
+
+function primaryFlightsUrl(bounds: {
+  lamin: number;
+  lomin: number;
+  lamax: number;
+  lomax: number;
+}): string {
+  const qs = boundsQuery(bounds);
 
   if (import.meta.env.DEV) {
     return `/opensky-api/states/all?${qs}`;
@@ -18,10 +36,36 @@ function flightsUrl(bounds: {
   const isLocal =
     host === "localhost" || host === "127.0.0.1" || host === "[::1]";
   if (isLocal) {
-    return `https://opensky-network.org/api/states/all?${qs}`;
+    return directOpenSkyUrl(bounds);
   }
 
   return `/api/opensky-states?${qs}`;
+}
+
+function shouldTryDirectAfterProxyFailure(status: number): boolean {
+  return status === 502 || status === 503 || status === 504;
+}
+
+function parseStatesPayload(data: { states?: unknown }): FlightState[] {
+  if (!data.states) return [];
+
+  return (data.states as any[]).map((s: any) => ({
+    icao24: s[0],
+    callsign: s[1]?.trim() || "N/A",
+    originCountry: s[2],
+    timePosition: s[3],
+    lastContact: s[4],
+    longitude: s[5],
+    latitude: s[6],
+    baroAltitude: s[7],
+    onGround: s[8],
+    velocity: s[9],
+    trueTrack: s[10],
+    verticalRate: s[11],
+    geoAltitude: s[13],
+    squawk: s[14],
+    positionSource: s[16],
+  }));
 }
 
 export async function fetchFlights(
@@ -34,16 +78,42 @@ export async function fetchFlights(
   retries = 5,
   delay = 2000
 ): Promise<FlightState[]> {
-  const url = flightsUrl(bounds);
+  const primary = primaryFlightsUrl(bounds);
 
   let response: Response;
   try {
-    response = await fetch(url);
+    response = await fetch(primary);
   } catch {
-    throw new Error(
-      "Sem conexão com a API de voos. Confira a internet e tente de novo."
-    );
+    if (!primary.includes("opensky-network.org")) {
+      try {
+        response = await fetch(directOpenSkyUrl(bounds));
+      } catch {
+        throw new Error(
+          "Sem conexão com a API de voos. Confira a internet e tente de novo."
+        );
+      }
+    } else {
+      throw new Error(
+        "Sem conexão com a API de voos. Confira a internet e tente de novo."
+      );
+    }
   }
+
+  if (
+    !response.ok &&
+    shouldTryDirectAfterProxyFailure(response.status) &&
+    !primary.includes("opensky-network.org")
+  ) {
+    try {
+      const fallback = await fetch(directOpenSkyUrl(bounds));
+      if (fallback.ok) {
+        response = fallback;
+      }
+    } catch {
+      /* segue para tratamento do response original */
+    }
+  }
+
   if (!response.ok) {
     if (response.status === 429 && retries > 0) {
       const jitter = Math.random() * 1500;
@@ -70,24 +140,5 @@ export async function fetchFlights(
   }
 
   const data = await response.json();
-
-  if (!data.states) return [];
-
-  return data.states.map((s: any) => ({
-    icao24: s[0],
-    callsign: s[1]?.trim() || "N/A",
-    originCountry: s[2],
-    timePosition: s[3],
-    lastContact: s[4],
-    longitude: s[5],
-    latitude: s[6],
-    baroAltitude: s[7],
-    onGround: s[8],
-    velocity: s[9],
-    trueTrack: s[10],
-    verticalRate: s[11],
-    geoAltitude: s[13],
-    squawk: s[14],
-    positionSource: s[16],
-  }));
+  return parseStatesPayload(data);
 }

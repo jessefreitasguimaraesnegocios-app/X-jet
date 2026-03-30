@@ -91,13 +91,24 @@ export default function App() {
           updateFlights(loc, radius);
         },
         (err) => {
-          console.error("Erro ao obter localização:", err);
-          // Fallback location (São Paulo)
+          // Code 2 = indisponível (ex.: Chrome 403 no provedor de rede Google — comum no desktop).
+          if (import.meta.env.DEV) {
+            console.warn("Geolocalização indisponível, usando São Paulo:", err.code, err.message);
+          }
           const fallback: [number, number] = [-23.5505, -46.6333];
           setUserLocation(fallback);
           updateFlights(fallback, radius);
+        },
+        {
+          enableHighAccuracy: false,
+          maximumAge: 300_000,
+          timeout: 12_000,
         }
       );
+    } else {
+      const fallback: [number, number] = [-23.5505, -46.6333];
+      setUserLocation(fallback);
+      updateFlights(fallback, radius);
     }
 
     const interval = setInterval(() => {
