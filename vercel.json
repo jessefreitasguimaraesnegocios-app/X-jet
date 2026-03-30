@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
-    "api/opensky-states.js": {
+    "api/flights.js": {
       "maxDuration": 30
     }
   }
