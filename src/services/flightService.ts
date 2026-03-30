@@ -19,31 +19,45 @@ function directOpenSkyUrl(bounds: {
   return `https://opensky-network.org/api/states/all?${boundsQuery(bounds)}`;
 }
 
-function primaryFlightsUrl(bounds: {
+function isLocalHost(): boolean {
+  if (typeof window === "undefined") return false;
+  const h = window.location.hostname;
+  return h === "localhost" || h === "127.0.0.1" || h === "[::1]";
+}
+
+/**
+ * Dev: proxy Vite. Localhost build/preview: só OpenSky direto.
+ * Produção (ex.: Vercel): OpenSky direto primeiro (evita bloqueio de IP de datacenter);
+ * `/api/opensky-states` só se a chamada direta falhar ou retornar erro HTTP.
+ */
+async function fetchOpenSkyResponse(bounds: {
   lamin: number;
   lomin: number;
   lamax: number;
   lomax: number;
-}): string {
+}): Promise<Response> {
   const qs = boundsQuery(bounds);
+  const direct = directOpenSkyUrl(bounds);
+  const proxyUrl = `/api/opensky-states?${qs}`;
 
   if (import.meta.env.DEV) {
-    return `/opensky-api/states/all?${qs}`;
+    return fetch(`/opensky-api/states/all?${qs}`);
   }
 
-  const host =
-    typeof window !== "undefined" ? window.location.hostname : "";
-  const isLocal =
-    host === "localhost" || host === "127.0.0.1" || host === "[::1]";
-  if (isLocal) {
-    return directOpenSkyUrl(bounds);
+  if (isLocalHost()) {
+    return fetch(direct);
   }
 
-  return `/api/opensky-states?${qs}`;
-}
+  try {
+    const directRes = await fetch(direct);
+    if (directRes.ok || directRes.status === 429) {
+      return directRes;
+    }
+  } catch {
+    /* rede/CORS: tenta proxy */
+  }
 
-function shouldTryDirectAfterProxyFailure(status: number): boolean {
-  return status === 502 || status === 503 || status === 504;
+  return fetch(proxyUrl);
 }
 
 function parseStatesPayload(data: { states?: unknown }): FlightState[] {
@@ -78,40 +92,13 @@ export async function fetchFlights(
   retries = 5,
   delay = 2000
 ): Promise<FlightState[]> {
-  const primary = primaryFlightsUrl(bounds);
-
   let response: Response;
   try {
-    response = await fetch(primary);
+    response = await fetchOpenSkyResponse(bounds);
   } catch {
-    if (!primary.includes("opensky-network.org")) {
-      try {
-        response = await fetch(directOpenSkyUrl(bounds));
-      } catch {
-        throw new Error(
-          "Sem conexão com a API de voos. Confira a internet e tente de novo."
-        );
-      }
-    } else {
-      throw new Error(
-        "Sem conexão com a API de voos. Confira a internet e tente de novo."
-      );
-    }
-  }
-
-  if (
-    !response.ok &&
-    shouldTryDirectAfterProxyFailure(response.status) &&
-    !primary.includes("opensky-network.org")
-  ) {
-    try {
-      const fallback = await fetch(directOpenSkyUrl(bounds));
-      if (fallback.ok) {
-        response = fallback;
-      }
-    } catch {
-      /* segue para tratamento do response original */
-    }
+    throw new Error(
+      "Sem conexão com a API de voos. Confira a internet e tente de novo."
+    );
   }
 
   if (!response.ok) {
