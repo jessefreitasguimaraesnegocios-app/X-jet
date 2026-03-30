@@ -21,8 +21,19 @@ export function normalizeCallsign(raw) {
   return s;
 }
 
+function cleanName(s) {
+  if (s == null) return null;
+  const t = String(s).trim();
+  return t.length > 0 ? t : null;
+}
+
 /**
- * @returns {{ departure: string | null, arrival: string | null }}
+ * @returns {{
+ *   departure: string | null,
+ *   arrival: string | null,
+ *   departureName: string | null,
+ *   arrivalName: string | null,
+ * }}
  */
 async function lookupAdsbdbCallsign(callsign) {
   const url = `https://api.adsbdb.com/v0/callsign/${encodeURIComponent(callsign)}`;
@@ -39,12 +50,22 @@ async function lookupAdsbdbCallsign(callsign) {
   try {
     data = JSON.parse(text);
   } catch {
-    return { departure: null, arrival: null };
+    return {
+      departure: null,
+      arrival: null,
+      departureName: null,
+      arrivalName: null,
+    };
   }
 
   const fr = data?.response?.flightroute;
   if (!fr || typeof fr !== "object") {
-    return { departure: null, arrival: null };
+    return {
+      departure: null,
+      arrival: null,
+      departureName: null,
+      arrivalName: null,
+    };
   }
 
   const dep = fr.origin?.icao_code ?? fr.origin?.iata_code;
@@ -59,17 +80,30 @@ async function lookupAdsbdbCallsign(callsign) {
       arr && String(arr).trim()
         ? String(arr).trim().toUpperCase()
         : null,
+    departureName: cleanName(fr.origin?.name),
+    arrivalName: cleanName(fr.destination?.name),
   };
 }
 
 /**
  * @param {string} icao24Raw
  * @param {string | null | undefined} callsignRaw
- * @returns {Promise<{ departure: string | null, arrival: string | null }>}
+ * @returns {Promise<{
+ *   departure: string | null,
+ *   arrival: string | null,
+ *   departureName: string | null,
+ *   arrivalName: string | null,
+ * }>}
  */
 export async function lookupFlightRoute(icao24Raw, callsignRaw) {
+  const empty = {
+    departure: null,
+    arrival: null,
+    departureName: null,
+    arrivalName: null,
+  };
   if (!normalizeIcao24(icao24Raw)) {
-    return { departure: null, arrival: null };
+    return empty;
   }
 
   const cs = normalizeCallsign(callsignRaw);
@@ -82,5 +116,5 @@ export async function lookupFlightRoute(icao24Raw, callsignRaw) {
     }
   }
 
-  return { departure: null, arrival: null };
+  return empty;
 }

@@ -1,6 +1,15 @@
 export type FlightRouteInfo = {
   departure: string | null;
   arrival: string | null;
+  departureName: string | null;
+  arrivalName: string | null;
+};
+
+const emptyRoute: FlightRouteInfo = {
+  departure: null,
+  arrival: null,
+  departureName: null,
+  arrivalName: null,
 };
 
 export async function fetchFlightRoute(
@@ -19,11 +28,13 @@ export async function fetchFlightRoute(
     headers: { Accept: "application/json" },
   });
   if (!res.ok) {
-    return { departure: null, arrival: null };
+    return { ...emptyRoute };
   }
-  const data = (await res.json()) as FlightRouteInfo;
+  const data = (await res.json()) as Partial<FlightRouteInfo>;
   return {
     departure: data.departure ?? null,
     arrival: data.arrival ?? null,
+    departureName: data.departureName ?? null,
+    arrivalName: data.arrivalName ?? null,
   };
 }

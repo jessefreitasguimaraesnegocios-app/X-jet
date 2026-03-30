@@ -23,6 +23,8 @@ import {
   Speaker,
   Loader2,
   LocateFixed,
+  Crosshair,
+  Mic,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -58,13 +60,59 @@ function planeIcon(deg: number, selected: boolean) {
   });
 }
 
-function MapCenter({ c }: { c: [number, number] }) {
+function MapCenter({
+  c,
+  snapToUser,
+}: {
+  c: [number, number];
+  snapToUser: boolean;
+}) {
   const map = useMap();
   useEffect(() => {
+    if (!snapToUser) return;
     map.setView(c, map.getZoom());
-  }, [c, map]);
+  }, [c, map, snapToUser]);
   return null;
 }
+
+/** Centraliza suavemente no avião quando a posição alvo muda (novo dado ADS-B). */
+function MapFollowPlane({
+  pos,
+  enabled,
+}: {
+  pos: [number, number] | null;
+  enabled: boolean;
+}) {
+  const map = useMap();
+  const prevRef = useRef<[number, number] | null>(null);
+
+  useEffect(() => {
+    if (!enabled) {
+      prevRef.current = null;
+      return;
+    }
+    if (!pos) return;
+    const prev = prevRef.current;
+    if (prev && prev[0] === pos[0] && prev[1] === pos[1]) return;
+    prevRef.current = pos;
+    map.panTo(pos, { animate: true, duration: 0.55 });
+  }, [enabled, pos?.[0], pos?.[1], map]);
+
+  return null;
+}
+
+function readStoredBool(key: string, defaultVal: boolean): boolean {
+  try {
+    const v = localStorage.getItem(key);
+    if (v === null) return defaultVal;
+    return v === "1" || v === "true";
+  } catch {
+    return defaultVal;
+  }
+}
+
+const LS_AUTO_VOICE = "xjet_auto_voice";
+const LS_FOLLOW_PLANE = "xjet_follow_plane";
 
 const SP_FALLBACK: [number, number] = [-23.5505, -46.6333];
 const POLL_MS_IDLE = 90_000;
@@ -86,6 +134,12 @@ export default function App() {
   const [geoBanner, setGeoBanner] = useState<string | null>(null);
   const [routeInfo, setRouteInfo] = useState<FlightRouteInfo | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
+  const [autoVoice, setAutoVoice] = useState(() =>
+    readStoredBool(LS_AUTO_VOICE, true)
+  );
+  const [followPlane, setFollowPlane] = useState(() =>
+    readStoredBool(LS_FOLLOW_PLANE, true)
+  );
 
   const centerRef = useRef(center);
   const abortRef = useRef<AbortController | null>(null);
@@ -98,6 +152,8 @@ export default function App() {
 
   const flightsRef = useRef(flights);
   flightsRef.current = flights;
+  const autoVoiceRef = useRef(autoVoice);
+  autoVoiceRef.current = autoVoice;
 
   const pickLive = useMemo(() => {
     if (!pick) return null;
@@ -211,6 +267,12 @@ export default function App() {
     }
     setGeoLoading(true);
     setErr(null);
+    setFollowPlane(false);
+    try {
+      localStorage.setItem(LS_FOLLOW_PLANE, "false");
+    } catch {
+      /* ignore */
+    }
     navigator.geolocation.getCurrentPosition(
       (p) => {
         setGeoLoading(false);
@@ -386,6 +448,7 @@ export default function App() {
       .then((r) => {
         if (ac.signal.aborted) return;
         setRouteInfo(r);
+        if (!autoVoiceRef.current) return;
         const fresh =
           flightsRef.current.find((x) => x.icao24 === f.icao24) ?? f;
         speakText(buildFlightSpeechBriefing(fresh, r));
@@ -393,7 +456,13 @@ export default function App() {
       .catch((e: unknown) => {
         if (ac.signal.aborted) return;
         if (e instanceof Error && e.name === "AbortError") return;
-        setRouteInfo({ departure: null, arrival: null });
+        setRouteInfo({
+          departure: null,
+          arrival: null,
+          departureName: null,
+          arrivalName: null,
+        });
+        if (!autoVoiceRef.current) return;
         const fresh =
           flightsRef.current.find((x) => x.icao24 === f.icao24) ?? f;
         speakText(buildFlightSpeechBriefing(fresh, null));
@@ -532,7 +601,14 @@ export default function App() {
               attribution='&copy; OSM &copy; CARTO'
               url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
             />
-            <MapCenter c={center} />
+            <MapCenter
+              c={center}
+              snapToUser={!(followPlane && pick)}
+            />
+            <MapFollowPlane
+              pos={pickTargetPos}
+              enabled={Boolean(followPlane && pick && pickTargetPos)}
+            />
             <Marker
               position={center}
               icon={L.divIcon({
@@ -660,6 +736,91 @@ export default function App() {
                 </button>
               </div>
 
+              <div className="rounded-xl bg-white/5 border border-white/10 divide-y divide-white/10 mb-4">
+                <label className="flex items-center justify-between gap-3 px-3 py-3 cursor-pointer touch-manipulation">
+                  <span className="flex items-center gap-2 text-sm min-w-0">
+                    <Crosshair
+                      className="w-4 h-4 shrink-0 text-emerald-400"
+                      strokeWidth={2.25}
+                    />
+                    <span className="leading-tight">
+                      Seguir avião no mapa
+                      <span className="block text-[10px] text-neutral-500 font-normal">
+                        Centraliza quando chegam novas posições
+                      </span>
+                    </span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={followPlane}
+                    onChange={(e) => {
+                      const v = e.target.checked;
+                      setFollowPlane(v);
+                      try {
+                        localStorage.setItem(LS_FOLLOW_PLANE, v ? "true" : "false");
+                      } catch {
+                        /* ignore */
+                      }
+                    }}
+                    className="sr-only"
+                  />
+                  <span
+                    className={cn(
+                      "shrink-0 w-11 h-6 rounded-full relative transition-colors pointer-events-none",
+                      followPlane ? "bg-emerald-600" : "bg-white/20"
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform",
+                        followPlane && "translate-x-5"
+                      )}
+                    />
+                  </span>
+                </label>
+                <label className="flex items-center justify-between gap-3 px-3 py-3 cursor-pointer touch-manipulation">
+                  <span className="flex items-center gap-2 text-sm min-w-0">
+                    <Mic
+                      className="w-4 h-4 shrink-0 text-blue-400"
+                      strokeWidth={2.25}
+                    />
+                    <span className="leading-tight">
+                      Narração ao tocar
+                      <span className="block text-[10px] text-neutral-500 font-normal">
+                        Ouvir continua disponível abaixo
+                      </span>
+                    </span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={autoVoice}
+                    onChange={(e) => {
+                      const v = e.target.checked;
+                      setAutoVoice(v);
+                      try {
+                        localStorage.setItem(LS_AUTO_VOICE, v ? "true" : "false");
+                      } catch {
+                        /* ignore */
+                      }
+                    }}
+                    className="sr-only"
+                  />
+                  <span
+                    className={cn(
+                      "shrink-0 w-11 h-6 rounded-full relative transition-colors pointer-events-none",
+                      autoVoice ? "bg-blue-600" : "bg-white/20"
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform",
+                        autoVoice && "translate-x-5"
+                      )}
+                    />
+                  </span>
+                </label>
+              </div>
+
               <div className="rounded-xl bg-white/5 border border-white/10 p-3 mb-4">
                 <p className="text-[10px] text-neutral-500 uppercase font-bold mb-2">
                   Rota (ADSBDB pelo indicativo)
@@ -676,6 +837,11 @@ export default function App() {
                         routeInfo?.departure ?? "—"
                       )}
                     </p>
+                    {!routeLoading && routeInfo?.departureName && (
+                      <p className="text-[11px] text-neutral-400 leading-snug mt-0.5 line-clamp-2">
+                        {routeInfo.departureName}
+                      </p>
+                    )}
                   </div>
                   <div>
                     <span className="text-[10px] text-neutral-500 uppercase font-bold">
@@ -688,6 +854,11 @@ export default function App() {
                         routeInfo?.arrival ?? "—"
                       )}
                     </p>
+                    {!routeLoading && routeInfo?.arrivalName && (
+                      <p className="text-[11px] text-neutral-400 leading-snug mt-0.5 line-clamp-2">
+                        {routeInfo.arrivalName}
+                      </p>
+                    )}
                   </div>
                 </div>
                 <p className="text-[9px] text-neutral-500 mt-2 leading-snug">

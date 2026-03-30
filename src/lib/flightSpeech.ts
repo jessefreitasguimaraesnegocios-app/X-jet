@@ -13,10 +13,14 @@ export function buildFlightSpeechBriefing(
       : null,
     `transponder I C A O ${f.icao24}`,
     route?.departure
-      ? `procedência estimada, aeroporto ${route.departure}`
+      ? `procedência estimada, aeroporto ${route.departure}${
+          route.departureName ? `, ${route.departureName}` : ""
+        }`
       : null,
     route?.arrival
-      ? `destino estimado, aeroporto ${route.arrival}`
+      ? `destino estimado, aeroporto ${route.arrival}${
+          route.arrivalName ? `, ${route.arrivalName}` : ""
+        }`
       : null,
     !route?.departure && !route?.arrival
       ? "origem e destino não encontrados para este indicativo"
