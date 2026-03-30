@@ -5,7 +5,8 @@ export type FlightRouteInfo = {
 
 export async function fetchFlightRoute(
   icao24: string,
-  callsign?: string | null
+  callsign?: string | null,
+  signal?: AbortSignal
 ): Promise<FlightRouteInfo> {
   const params = new URLSearchParams();
   params.set("icao24", icao24.replace(/^~/, ""));
@@ -14,6 +15,7 @@ export async function fetchFlightRoute(
     params.set("callsign", cs);
   }
   const res = await fetch(`/api/flight-route?${params}`, {
+    signal,
     headers: { Accept: "application/json" },
   });
   if (!res.ok) {

@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   MapContainer,
   TileLayer,
@@ -28,8 +34,10 @@ import {
   type FlightRouteInfo,
 } from "./services/flightRouteService";
 import { speakText } from "./services/ttsService";
-import type { FlightState, FlightDetails } from "./types";
+import type { FlightState } from "./types";
 import { cn } from "./lib/utils";
+import { buildFlightSpeechBriefing } from "./lib/flightSpeech";
+import { useLerpedLatLng } from "./hooks/useLerpedLatLng";
 
 delete (L.Icon.Default.prototype as unknown as { _getIconUrl?: unknown })
   ._getIconUrl;
@@ -59,14 +67,16 @@ function MapCenter({ c }: { c: [number, number] }) {
 }
 
 const SP_FALLBACK: [number, number] = [-23.5505, -46.6333];
-const POLL_MS = 90_000;
+const POLL_MS_IDLE = 90_000;
+const POLL_MS_PICKED = 12_000;
+const TRAIL_MIN_DIST_DEG = 0.0008;
 
 export default function App() {
   const [center, setCenter] = useState<[number, number] | null>(null);
   const [radiusKm, setRadiusKm] = useState(100);
   const [flights, setFlights] = useState<FlightState[]>([]);
   const [pick, setPick] = useState<FlightState | null>(null);
-  const [details, setDetails] = useState<FlightDetails | null>(null);
+  const [trail, setTrail] = useState<[number, number][]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [updated, setUpdated] = useState(() => new Date());
@@ -79,9 +89,87 @@ export default function App() {
 
   const centerRef = useRef(center);
   const abortRef = useRef<AbortController | null>(null);
+  const routeAbortRef = useRef<AbortController | null>(null);
+  const trailPickRef = useRef<string | null>(null);
+
   useEffect(() => {
     centerRef.current = center;
   }, [center]);
+
+  const flightsRef = useRef(flights);
+  flightsRef.current = flights;
+
+  const pickLive = useMemo(() => {
+    if (!pick) return null;
+    return flights.find((x) => x.icao24 === pick.icao24) ?? pick;
+  }, [pick, flights]);
+
+  const pickTargetPos: [number, number] | null =
+    pickLive?.latitude != null && pickLive?.longitude != null
+      ? [pickLive.latitude, pickLive.longitude]
+      : null;
+
+  const pickAnimPos = useLerpedLatLng(
+    pickTargetPos,
+    pick?.icao24 ?? null,
+    1100
+  );
+
+  useEffect(() => {
+    if (!pick) return;
+    setPick((p) => {
+      if (!p) return p;
+      const u = flights.find((x) => x.icao24 === p.icao24);
+      if (!u) return p;
+      if (
+        p.latitude === u.latitude &&
+        p.longitude === u.longitude &&
+        p.baroAltitude === u.baroAltitude &&
+        p.velocity === u.velocity &&
+        p.trueTrack === u.trueTrack &&
+        p.onGround === u.onGround
+      ) {
+        return p;
+      }
+      return u;
+    });
+  }, [flights, pick?.icao24]);
+
+  useEffect(() => {
+    if (!pickLive || pickLive.latitude == null || pickLive.longitude == null) {
+      if (!pick) {
+        setTrail([]);
+        trailPickRef.current = null;
+      }
+      return;
+    }
+    const { icao24 } = pickLive;
+    const lat = pickLive.latitude;
+    const lon = pickLive.longitude;
+
+    if (trailPickRef.current !== icao24) {
+      trailPickRef.current = icao24;
+      setTrail([[lat, lon]]);
+      return;
+    }
+
+    setTrail((prev) => {
+      const last = prev[prev.length - 1];
+      if (last) {
+        const dLat = lat - last[0];
+        const dLon = lon - last[1];
+        if (dLat * dLat + dLon * dLon < TRAIL_MIN_DIST_DEG * TRAIL_MIN_DIST_DEG) {
+          return prev;
+        }
+      }
+      return [...prev, [lat, lon]].slice(-160);
+    });
+  }, [
+    pick,
+    pickLive?.icao24,
+    pickLive?.latitude,
+    pickLive?.longitude,
+  ]);
 
   const load = useCallback(
     async (opts?: { silent?: boolean }) => {
@@ -231,9 +319,10 @@ export default function App() {
   }, [center, load]);
 
   useEffect(() => {
-    const id = window.setInterval(() => void load({ silent: true }), POLL_MS);
+    const ms = pick ? POLL_MS_PICKED : POLL_MS_IDLE;
+    const id = window.setInterval(() => void load({ silent: true }), ms);
     return () => window.clearInterval(id);
-  }, [load]);
+  }, [load, pick]);
 
   const prevR = useRef(radiusKm);
   useEffect(() => {
@@ -276,27 +365,42 @@ export default function App() {
   };
 
   const onPick = (f: FlightState) => {
+    routeAbortRef.current?.abort();
+    const ac = new AbortController();
+    routeAbortRef.current = ac;
+
     setPick(f);
     setRouteInfo(null);
     setRouteLoading(true);
-    setDetails({
-      icao24: f.icao24,
-      model: "—",
-      operator: "—",
-      capacity: 0,
-      origin: "—",
-      destination: "—",
-      route: f.latitude != null &&
-        f.longitude != null && [
-          [f.latitude + 0.5, f.longitude - 0.5],
-          [f.latitude, f.longitude],
-          [f.latitude - 0.5, f.longitude + 0.5],
-        ],
-    });
-    void fetchFlightRoute(f.icao24, f.callsign)
-      .then((r) => setRouteInfo(r))
-      .finally(() => setRouteLoading(false));
-    void speakText(`Voo ${f.callsign} selecionado.`);
+    trailPickRef.current = null;
+    if (f.latitude != null && f.longitude != null) {
+      setTrail([[f.latitude, f.longitude]]);
+      trailPickRef.current = f.icao24;
+    } else {
+      setTrail([]);
+    }
+
+    void load({ silent: true });
+
+    void fetchFlightRoute(f.icao24, f.callsign, ac.signal)
+      .then((r) => {
+        if (ac.signal.aborted) return;
+        setRouteInfo(r);
+        const fresh =
+          flightsRef.current.find((x) => x.icao24 === f.icao24) ?? f;
+        speakText(buildFlightSpeechBriefing(fresh, r));
+      })
+      .catch((e: unknown) => {
+        if (ac.signal.aborted) return;
+        if (e instanceof Error && e.name === "AbortError") return;
+        setRouteInfo({ departure: null, arrival: null });
+        const fresh =
+          flightsRef.current.find((x) => x.icao24 === f.icao24) ?? f;
+        speakText(buildFlightSpeechBriefing(fresh, null));
+      })
+      .finally(() => {
+        if (!ac.signal.aborted) setRouteLoading(false);
+      });
   };
 
   const bearing = (f: FlightState) => {
@@ -450,29 +554,58 @@ export default function App() {
                 fillOpacity: 0.06,
               }}
             />
-            {flights.map(
-              (f) =>
-                f.latitude != null &&
-                f.longitude != null && (
-                  <Marker
-                    key={f.icao24}
-                    position={[f.latitude, f.longitude]}
-                    icon={planeIcon(f.trueTrack ?? 0, pick?.icao24 === f.icao24)}
-                    eventHandlers={{ click: () => onPick(f) }}
-                  >
-                    <Popup>
-                      <div className="text-neutral-900 p-1">
-                        <p className="font-bold">{f.callsign}</p>
-                        <p className="text-xs text-neutral-500">{f.originCountry}</p>
-                      </div>
-                    </Popup>
-                  </Marker>
-                )
-            )}
-            {pick && details?.route && (
+            {flights
+              .filter((f) => f.icao24 !== pick?.icao24)
+              .map(
+                (f) =>
+                  f.latitude != null &&
+                  f.longitude != null && (
+                    <Marker
+                      key={f.icao24}
+                      position={[f.latitude, f.longitude]}
+                      icon={planeIcon(f.trueTrack ?? 0, false)}
+                      eventHandlers={{ click: () => onPick(f) }}
+                    >
+                      <Popup>
+                        <div className="text-neutral-900 p-1">
+                          <p className="font-bold">{f.callsign}</p>
+                          <p className="text-xs text-neutral-500">
+                            {f.originCountry}
+                          </p>
+                        </div>
+                      </Popup>
+                    </Marker>
+                  )
+              )}
+            {pick &&
+              pickTargetPos &&
+              pickLive?.latitude != null &&
+              pickLive?.longitude != null && (
+                <Marker
+                  key={`pick-${pick.icao24}`}
+                  position={pickAnimPos ?? pickTargetPos}
+                  icon={planeIcon(
+                    pickLive.trueTrack ?? 0,
+                    true
+                  )}
+                  eventHandlers={{
+                    click: () => onPick(pickLive),
+                  }}
+                >
+                  <Popup>
+                    <div className="text-neutral-900 p-1">
+                      <p className="font-bold">{pickLive.callsign}</p>
+                      <p className="text-xs text-neutral-500">
+                        {pickLive.originCountry}
+                      </p>
+                    </div>
+                  </Popup>
+                </Marker>
+              )}
+            {trail.length >= 2 && (
               <Polyline
-                positions={details.route}
-                pathOptions={{ color: "#ef4444", weight: 2, dashArray: "5 8" }}
+                positions={trail}
+                pathOptions={{ color: "#ef4444", weight: 3, opacity: 0.85 }}
               />
             )}
           </MapContainer>
@@ -504,16 +637,21 @@ export default function App() {
             <div className="overflow-y-auto overscroll-contain px-4 pt-4 flex-1 min-h-0">
               <div className="flex justify-between gap-3 mb-4">
                 <div className="min-w-0">
-                  <h2 className="text-2xl font-black truncate">{pick.callsign}</h2>
+                  <h2 className="text-2xl font-black truncate">
+                    {pickLive?.callsign ?? pick.callsign}
+                  </h2>
                   <p className="text-blue-400 text-xs font-mono uppercase">
-                    {pick.originCountry}
+                    {pickLive?.originCountry ?? pick.originCountry}
                   </p>
                 </div>
                 <button
                   type="button"
                   onClick={() => {
+                    routeAbortRef.current?.abort();
                     setPick(null);
                     setRouteInfo(null);
+                    setTrail([]);
+                    trailPickRef.current = null;
                   }}
                   className="shrink-0 w-11 h-11 rounded-full bg-white/10 flex items-center justify-center active:scale-95"
                   aria-label="Fechar"
@@ -563,30 +701,24 @@ export default function App() {
                   <span className="text-[10px] text-neutral-500 uppercase font-bold">
                     Altitude
                   </span>
-                  <p>{Math.round(pick.baroAltitude ?? 0)} m</p>
+                  <p>
+                    {Math.round((pickLive ?? pick).baroAltitude ?? 0)} m
+                  </p>
                 </div>
                 <div>
                   <span className="text-[10px] text-neutral-500 uppercase font-bold">
                     Velocidade
                   </span>
-                  <p>{Math.round((pick.velocity ?? 0) * 3.6)} km/h</p>
+                  <p>
+                    {Math.round(((pickLive ?? pick).velocity ?? 0) * 3.6)} km/h
+                  </p>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => {
-                  const bits = [
-                    `Voo ${pick.callsign}`,
-                    routeInfo?.departure
-                      ? `procedência estimada, aeroporto ${routeInfo.departure}`
-                      : null,
-                    routeInfo?.arrival
-                      ? `destino estimado, aeroporto ${routeInfo.arrival}`
-                      : null,
-                    `altitude ${Math.round(pick.baroAltitude ?? 0)} metros`,
-                    `velocidade ${Math.round((pick.velocity ?? 0) * 3.6)} quilômetros por hora`,
-                  ].filter(Boolean);
-                  void speakText(bits.join(". ") + ".");
+                  const f = pickLive ?? pick;
+                  void speakText(buildFlightSpeechBriefing(f, routeInfo));
                 }}
                 className="w-full min-h-12 rounded-xl bg-blue-600 font-bold flex items-center justify-center gap-2 active:scale-[0.99] mb-2"
               >
