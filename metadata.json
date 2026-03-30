@@ -1,0 +1,5 @@
+{
+  "name": "Rastreador de Voos em Tempo Real",
+  "description": "Acompanhe aeronaves ao seu redor em tempo real com visualização de rota e realidade aumentada.",
+  "requestFramePermissions": ["geolocation"]
+}
