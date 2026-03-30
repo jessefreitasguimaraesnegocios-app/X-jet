@@ -624,6 +624,15 @@ export default function App() {
             <p className="text-[10px] text-blue-400 font-mono uppercase">
               Tempo real
             </p>
+            {center && (
+              <p className="flex items-center gap-1.5 mt-0.5 text-[10px] font-mono tabular-nums text-emerald-400/95">
+                <span className="uppercase tracking-wide text-neutral-500 font-bold">
+                  Total
+                </span>
+                <Plane className="w-3.5 h-3.5 shrink-0" aria-hidden />
+                <span>{displayFlights.length}</span>
+              </p>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">
@@ -1167,9 +1176,16 @@ export default function App() {
           className="absolute left-0 right-0 z-[1000] bottom-[max(0.6rem,env(safe-area-inset-bottom))] md:left-6 md:right-auto md:bottom-6 md:w-52"
         >
           <div className="mx-3 md:mx-0 rounded-2xl border border-white/10 bg-neutral-900/95 px-4 py-3 backdrop-blur-md">
-            <div className="flex justify-between text-[10px] uppercase font-bold text-neutral-500 mb-2">
+            <div className="flex justify-between text-[10px] uppercase font-bold text-neutral-500 mb-1">
               <span>Raio</span>
               <span className="text-blue-400 font-mono">{radiusKm} km</span>
+            </div>
+            <div className="flex items-center gap-1.5 mb-2 text-[10px] font-mono tabular-nums text-emerald-400">
+              <span className="uppercase tracking-wide text-neutral-500 font-bold">
+                Total
+              </span>
+              <Plane className="w-3.5 h-3.5 shrink-0" aria-hidden />
+              <span>{displayFlights.length}</span>
             </div>
             <input
               type="range"
