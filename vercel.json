@@ -3,6 +3,9 @@
   "functions": {
     "api/flights.js": {
       "maxDuration": 30
+    },
+    "api/flight-route.js": {
+      "maxDuration": 25
     }
   }
 }

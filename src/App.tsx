@@ -23,6 +23,10 @@ import {
   fetchFlights,
   boundsFromCenterRadiusKm,
 } from "./services/flightService";
+import {
+  fetchFlightRoute,
+  type FlightRouteInfo,
+} from "./services/flightRouteService";
 import { speakText } from "./services/ttsService";
 import type { FlightState, FlightDetails } from "./types";
 import { cn } from "./lib/utils";
@@ -69,6 +73,8 @@ export default function App() {
   const [ar, setAr] = useState(false);
   const [heading, setHeading] = useState<number | null>(null);
   const [geoLoading, setGeoLoading] = useState(false);
+  const [routeInfo, setRouteInfo] = useState<FlightRouteInfo | null>(null);
+  const [routeLoading, setRouteLoading] = useState(false);
 
   const centerRef = useRef(center);
   const abortRef = useRef<AbortController | null>(null);
@@ -207,6 +213,8 @@ export default function App() {
 
   const onPick = (f: FlightState) => {
     setPick(f);
+    setRouteInfo(null);
+    setRouteLoading(true);
     setDetails({
       icao24: f.icao24,
       model: "—",
@@ -221,6 +229,9 @@ export default function App() {
           [f.latitude - 0.5, f.longitude + 0.5],
         ],
     });
+    void fetchFlightRoute(f.icao24)
+      .then((r) => setRouteInfo(r))
+      .finally(() => setRouteLoading(false));
     void speakText(`Voo ${f.callsign} selecionado.`);
   };
 
@@ -418,13 +429,53 @@ export default function App() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setPick(null)}
+                  onClick={() => {
+                    setPick(null);
+                    setRouteInfo(null);
+                  }}
                   className="shrink-0 w-11 h-11 rounded-full bg-white/10 flex items-center justify-center active:scale-95"
                   aria-label="Fechar"
                 >
                   <X className="w-6 h-6" />
                 </button>
               </div>
+
+              <div className="rounded-xl bg-white/5 border border-white/10 p-3 mb-4">
+                <p className="text-[10px] text-neutral-500 uppercase font-bold mb-2">
+                  Rota (estimativa OpenSky)
+                </p>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <span className="text-[10px] text-neutral-500 uppercase font-bold">
+                      De
+                    </span>
+                    <p className="font-mono text-amber-200/95 flex items-center gap-1 min-h-[1.25rem]">
+                      {routeLoading ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-blue-400" />
+                      ) : (
+                        routeInfo?.departure ?? "—"
+                      )}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-neutral-500 uppercase font-bold">
+                      Para
+                    </span>
+                    <p className="font-mono text-emerald-200/95 flex items-center gap-1 min-h-[1.25rem]">
+                      {routeLoading ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-blue-400" />
+                      ) : (
+                        routeInfo?.arrival ?? "—"
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <p className="text-[9px] text-neutral-500 mt-2 leading-snug">
+                  Códigos ICAO dos aeroportos quando a rede ADS-B registrou a perna do voo
+                  (nem sempre disponível).
+                </p>
+              </div>
+
               <div className="grid grid-cols-2 gap-3 text-sm mb-4">
                 <div>
                   <span className="text-[10px] text-neutral-500 uppercase font-bold">
@@ -441,11 +492,20 @@ export default function App() {
               </div>
               <button
                 type="button"
-                onClick={() =>
-                  speakText(
-                    `Voo ${pick.callsign}, altitude ${Math.round(pick.baroAltitude ?? 0)} metros, velocidade ${Math.round((pick.velocity ?? 0) * 3.6)} quilômetros por hora.`
-                  )
-                }
+                onClick={() => {
+                  const bits = [
+                    `Voo ${pick.callsign}`,
+                    routeInfo?.departure
+                      ? `procedência estimada, aeroporto ${routeInfo.departure}`
+                      : null,
+                    routeInfo?.arrival
+                      ? `destino estimado, aeroporto ${routeInfo.arrival}`
+                      : null,
+                    `altitude ${Math.round(pick.baroAltitude ?? 0)} metros`,
+                    `velocidade ${Math.round((pick.velocity ?? 0) * 3.6)} quilômetros por hora`,
+                  ].filter(Boolean);
+                  void speakText(bits.join(". ") + ".");
+                }}
                 className="w-full min-h-12 rounded-xl bg-blue-600 font-bold flex items-center justify-center gap-2 active:scale-[0.99] mb-2"
               >
                 <Speaker className="w-5 h-5" /> Ouvir

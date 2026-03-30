@@ -36,30 +36,60 @@ export default defineConfig(({mode}) => {
         configureServer(server) {
           server.middlewares.use(async (req, res, next) => {
             const raw = req.url ?? '';
-            if (!raw.startsWith('/api/flights')) {
-              next();
+            const pathname = raw.split('?')[0] ?? '';
+
+            if (pathname === '/api/flight-route') {
+              try {
+                const {lookupFlightRoute, normalizeIcao24} = await import(
+                  './api/flightRouteLookup.mjs'
+                );
+                const parsed = parseUrl(raw, true);
+                const q = parsed.query ?? {};
+                const v = Array.isArray(q.icao24) ? q.icao24[0] : q.icao24;
+                if (!v || !normalizeIcao24(v)) {
+                  res.statusCode = 400;
+                  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                  res.end(JSON.stringify({error: 'invalid_icao24'}));
+                  return;
+                }
+                const route = await lookupFlightRoute(v);
+                res.statusCode = 200;
+                res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                res.end(JSON.stringify(route));
+              } catch (e) {
+                console.error('[vite /api/flight-route]', e);
+                res.statusCode = 500;
+                res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                res.end(JSON.stringify({error: 'server_error'}));
+              }
               return;
             }
-            try {
-              const {aggregateFlights} = await import('./api/flightAggregator.mjs');
-              const parsed = parseUrl(raw, true);
-              const bounds = parseBoundsFromQuery(parsed.query ?? {});
-              if (!bounds) {
-                res.statusCode = 400;
+
+            if (pathname === '/api/flights') {
+              try {
+                const {aggregateFlights} = await import('./api/flightAggregator.mjs');
+                const parsed = parseUrl(raw, true);
+                const bounds = parseBoundsFromQuery(parsed.query ?? {});
+                if (!bounds) {
+                  res.statusCode = 400;
+                  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                  res.end(JSON.stringify({error: 'invalid_bounds'}));
+                  return;
+                }
+                const aircraft = await aggregateFlights(bounds);
+                res.statusCode = 200;
                 res.setHeader('Content-Type', 'application/json; charset=utf-8');
-                res.end(JSON.stringify({error: 'invalid_bounds'}));
-                return;
+                res.end(JSON.stringify({aircraft}));
+              } catch (e) {
+                console.error('[vite /api/flights]', e);
+                res.statusCode = 500;
+                res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                res.end(JSON.stringify({error: 'server_error'}));
               }
-              const aircraft = await aggregateFlights(bounds);
-              res.statusCode = 200;
-              res.setHeader('Content-Type', 'application/json; charset=utf-8');
-              res.end(JSON.stringify({aircraft}));
-            } catch (e) {
-              console.error('[vite /api/flights]', e);
-              res.statusCode = 500;
-              res.setHeader('Content-Type', 'application/json; charset=utf-8');
-              res.end(JSON.stringify({error: 'server_error'}));
+              return;
             }
+
+            next();
           });
         },
       },
