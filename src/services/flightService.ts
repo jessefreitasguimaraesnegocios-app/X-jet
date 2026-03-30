@@ -82,16 +82,15 @@ function parseStatesPayload(data: { states?: unknown }): FlightState[] {
   }));
 }
 
-export async function fetchFlights(
-  bounds: {
-    lamin: number;
-    lomin: number;
-    lamax: number;
-    lomax: number;
-  },
-  retries = 5,
-  delay = 2000
-): Promise<FlightState[]> {
+/**
+ * Sem retries em 429: cada nova tentativa piora o bloqueio da OpenSky (API anônima).
+ */
+export async function fetchFlights(bounds: {
+  lamin: number;
+  lomin: number;
+  lamax: number;
+  lomax: number;
+}): Promise<FlightState[]> {
   let response: Response;
   try {
     response = await fetchOpenSkyResponse(bounds);
@@ -102,15 +101,6 @@ export async function fetchFlights(
   }
 
   if (!response.ok) {
-    if (response.status === 429 && retries > 0) {
-      const jitter = Math.random() * 1500;
-      const nextDelay = delay + jitter;
-      console.warn(
-        `OpenSky rate limit. Nova tentativa em ${Math.round(nextDelay)}ms...`
-      );
-      await new Promise((resolve) => setTimeout(resolve, nextDelay));
-      return fetchFlights(bounds, retries - 1, delay * 1.5);
-    }
     const errorText = await response.text();
     console.error(
       `OpenSky API Error: ${response.status} ${response.statusText}`,
@@ -118,7 +108,7 @@ export async function fetchFlights(
     );
     if (response.status === 429) {
       throw new Error(
-        "OpenSky limitou as consultas (muitas requisições). Aguarde 1–2 minutos e toque em atualizar."
+        "OpenSky limitou as consultas. Aguarde alguns minutos sem atualizar e tente de novo (a API pública tem limite baixo)."
       );
     }
     throw new Error(

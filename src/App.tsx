@@ -51,14 +51,32 @@ export default function App() {
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
   const [error, setError] = useState<string | null>(null);
 
-  const fetchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const locationRef = useRef<[number, number] | null>(null);
+  const radiusRef = useRef(radius);
+  const prevRadiusRef = useRef(radius);
+  const fetchInFlightRef = useRef(false);
 
-  const updateFlights = useCallback(async (loc: [number, number], r: number) => {
+  useEffect(() => {
+    radiusRef.current = radius;
+  }, [radius]);
+
+  /** Uma requisição por vez; evita rajadas que disparam 429 na OpenSky. */
+  const updateFlights = useCallback(async (opts?: { silent?: boolean }) => {
+    const loc = locationRef.current;
+    if (!loc) return;
+    if (fetchInFlightRef.current) return;
+
+    fetchInFlightRef.current = true;
+    const silent = opts?.silent === true;
+    if (!silent) {
+      setLoading(true);
+    }
+
+    const r = radiusRef.current;
     try {
-      // Approx bounding box for radius in km
       const latDelta = r / 111;
       const lonDelta = r / (111 * Math.cos(loc[0] * (Math.PI / 180)));
-      
+
       const bounds = {
         lamin: loc[0] - latDelta,
         lomin: loc[1] - lonDelta,
@@ -78,26 +96,29 @@ export default function App() {
           : "Não foi possível atualizar os voos. Verifique a conexão.";
       setError(msg);
     } finally {
+      fetchInFlightRef.current = false;
       setLoading(false);
     }
   }, []);
+
+  const fallbackLoc: [number, number] = [-23.5505, -46.6333];
 
   useEffect(() => {
     if ("geolocation" in navigator) {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           const loc: [number, number] = [pos.coords.latitude, pos.coords.longitude];
+          locationRef.current = loc;
           setUserLocation(loc);
-          updateFlights(loc, radius);
+          void updateFlights();
         },
         (err) => {
-          // Code 2 = indisponível (ex.: Chrome 403 no provedor de rede Google — comum no desktop).
           if (import.meta.env.DEV) {
             console.warn("Geolocalização indisponível, usando São Paulo:", err.code, err.message);
           }
-          const fallback: [number, number] = [-23.5505, -46.6333];
-          setUserLocation(fallback);
-          updateFlights(fallback, radius);
+          locationRef.current = fallbackLoc;
+          setUserLocation(fallbackLoc);
+          void updateFlights();
         },
         {
           enableHighAccuracy: false,
@@ -106,24 +127,35 @@ export default function App() {
         }
       );
     } else {
-      const fallback: [number, number] = [-23.5505, -46.6333];
-      setUserLocation(fallback);
-      updateFlights(fallback, radius);
+      locationRef.current = fallbackLoc;
+      setUserLocation(fallbackLoc);
+      void updateFlights();
     }
+  }, [updateFlights]);
 
-    const interval = setInterval(() => {
-      if (userLocation && !loading) {
-        updateFlights(userLocation, radius);
+  useEffect(() => {
+    const POLL_MS = 120_000;
+    const id = window.setInterval(() => {
+      if (locationRef.current) {
+        void updateFlights({ silent: true });
       }
-    }, 30000); // Increased to 30s to avoid 429
+    }, POLL_MS);
+    return () => window.clearInterval(id);
+  }, [updateFlights]);
 
-    return () => clearInterval(interval);
-  }, [radius, updateFlights, userLocation, loading]);
+  useEffect(() => {
+    if (!locationRef.current) return;
+    if (prevRadiusRef.current === radius) return;
+    prevRadiusRef.current = radius;
+    const t = window.setTimeout(() => {
+      void updateFlights({ silent: true });
+    }, 700);
+    return () => window.clearTimeout(t);
+  }, [radius, updateFlights]);
 
   const handleManualRefresh = () => {
-    if (userLocation && !loading) {
-      setLoading(true);
-      updateFlights(userLocation, radius);
+    if (locationRef.current) {
+      void updateFlights({ silent: false });
     }
   };
 
