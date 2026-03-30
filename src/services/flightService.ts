@@ -52,3 +52,42 @@ export function boundsFromCenterRadiusKm(
     lomax: lon + lonDelta,
   };
 }
+
+const EARTH_R_M = 6_371_000;
+
+function toRad(d: number) {
+  return (d * Math.PI) / 180;
+}
+
+/** Distância ao solo (Haversine), em metros. */
+export function distanceMeters(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+): number {
+  const φ1 = toRad(lat1);
+  const φ2 = toRad(lat2);
+  const Δφ = toRad(lat2 - lat1);
+  const Δλ = toRad(lon2 - lon1);
+  const a =
+    Math.sin(Δφ / 2) ** 2 +
+    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+  return EARTH_R_M * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/** Filtra voos já carregados para um raio menor (sem nova requisição). */
+export function filterFlightsWithinRadiusKm(
+  list: FlightState[],
+  centerLat: number,
+  centerLon: number,
+  radiusKm: number
+): FlightState[] {
+  const maxM = radiusKm * 1000;
+  return list.filter((f) => {
+    if (f.latitude == null || f.longitude == null) return false;
+    return (
+      distanceMeters(centerLat, centerLon, f.latitude, f.longitude) <= maxM
+    );
+  });
+}

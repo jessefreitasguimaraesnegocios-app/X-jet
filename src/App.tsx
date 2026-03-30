@@ -32,6 +32,7 @@ import { motion, AnimatePresence } from "motion/react";
 import {
   fetchFlights,
   boundsFromCenterRadiusKm,
+  filterFlightsWithinRadiusKm,
 } from "./services/flightService";
 import {
   fetchFlightRoute,
@@ -158,7 +159,7 @@ const TRAIL_MIN_DIST_DEG = 0.0008;
 export default function App() {
   const [center, setCenter] = useState<[number, number] | null>(null);
   const [radiusKm, setRadiusKm] = useState(100);
-  const [flights, setFlights] = useState<FlightState[]>([]);
+  const [flightsPool, setFlightsPool] = useState<FlightState[]>([]);
   const [pick, setPick] = useState<FlightState | null>(null);
   const [trail, setTrail] = useState<[number, number][]>([]);
   const [loading, setLoading] = useState(false);
@@ -184,20 +185,48 @@ export default function App() {
   const abortRef = useRef<AbortController | null>(null);
   const routeAbortRef = useRef<AbortController | null>(null);
   const trailPickRef = useRef<string | null>(null);
+  const loadedRadiusRef = useRef(0);
+  const flightsPoolRef = useRef<FlightState[]>([]);
+  const radiusKmRef = useRef(radiusKm);
+  const flightCacheCenterKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     centerRef.current = center;
   }, [center]);
 
-  const flightsRef = useRef(flights);
-  flightsRef.current = flights;
+  useEffect(() => {
+    radiusKmRef.current = radiusKm;
+  }, [radiusKm]);
+
+  useEffect(() => {
+    flightsPoolRef.current = flightsPool;
+  }, [flightsPool]);
+
+  const centerKey = useMemo(
+    () =>
+      center
+        ? `${center[0].toFixed(4)},${center[1].toFixed(4)}`
+        : null,
+    [center]
+  );
+
+  const displayFlights = useMemo(() => {
+    if (!center) return [];
+    return filterFlightsWithinRadiusKm(
+      flightsPool,
+      center[0],
+      center[1],
+      radiusKm
+    );
+  }, [flightsPool, center, radiusKm]);
+
   const autoVoiceRef = useRef(autoVoice);
   autoVoiceRef.current = autoVoice;
 
   const pickLive = useMemo(() => {
     if (!pick) return null;
-    return flights.find((x) => x.icao24 === pick.icao24) ?? pick;
-  }, [pick, flights]);
+    return flightsPool.find((x) => x.icao24 === pick.icao24) ?? pick;
+  }, [pick, flightsPool]);
 
   const pickTargetPos: [number, number] | null =
     pickLive?.latitude != null && pickLive?.longitude != null
@@ -214,7 +243,7 @@ export default function App() {
     if (!pick) return;
     setPick((p) => {
       if (!p) return p;
-      const u = flights.find((x) => x.icao24 === p.icao24);
+      const u = flightsPool.find((x) => x.icao24 === p.icao24);
       if (!u) return p;
       if (
         p.latitude === u.latitude &&
@@ -229,7 +258,7 @@ export default function App() {
       }
       return u;
     });
-  }, [flights, pick?.icao24]);
+  }, [flightsPool, pick?.icao24]);
 
   useEffect(() => {
     if (pick?.icao24) setSheetSnap(1);
@@ -271,26 +300,56 @@ export default function App() {
     pickLive?.longitude,
   ]);
 
-  const load = useCallback(
-    async (opts?: { silent?: boolean }) => {
+  const loadFlights = useCallback(
+    async (opts?: {
+      silent?: boolean;
+      mode?: "expand" | "poll" | "refresh";
+    }) => {
       const pos = centerRef.current;
       if (!pos) return;
+
+      const mode = opts?.mode ?? "expand";
+      const rUser = radiusKmRef.current;
+      const rLoaded = loadedRadiusRef.current;
+      const pool = flightsPoolRef.current;
+
+      if (mode === "expand") {
+        if (rLoaded > 0 && rUser <= rLoaded && pool.length > 0) {
+          return;
+        }
+      }
+
+      let fetchR: number;
+      if (mode === "refresh") {
+        fetchR = rUser;
+      } else if (mode === "poll") {
+        fetchR = rLoaded === 0 ? rUser : Math.max(rUser, rLoaded);
+      } else {
+        fetchR = Math.max(rUser, rLoaded);
+      }
+
+      const silentExplicit = opts?.silent;
+      const silent =
+        silentExplicit === true ||
+        (silentExplicit !== false &&
+          mode !== "refresh" &&
+          pool.length > 0);
 
       abortRef.current?.abort();
       const ac = new AbortController();
       abortRef.current = ac;
 
-      const silent = opts?.silent === true;
       if (!silent) {
         setLoading(true);
         setErr(null);
       }
 
       try {
-        const b = boundsFromCenterRadiusKm(pos[0], pos[1], radiusKm);
+        const b = boundsFromCenterRadiusKm(pos[0], pos[1], fetchR);
         const list = await fetchFlights(b, ac.signal);
         if (ac.signal.aborted) return;
-        setFlights(list);
+        setFlightsPool(list);
+        loadedRadiusRef.current = fetchR;
         setUpdated(new Date());
       } catch (e: unknown) {
         if (ac.signal.aborted) return;
@@ -301,7 +360,7 @@ export default function App() {
         if (!ac.signal.aborted) setLoading(false);
       }
     },
-    [radiusKm]
+    []
   );
 
   const requestCurrentLocation = useCallback(() => {
@@ -414,24 +473,27 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!center) return;
-    void load();
-  }, [center, load]);
+    if (!centerKey) return;
+    if (flightCacheCenterKeyRef.current === centerKey) return;
+    flightCacheCenterKeyRef.current = centerKey;
+    loadedRadiusRef.current = 0;
+    flightsPoolRef.current = [];
+    setFlightsPool([]);
+  }, [centerKey]);
+
+  useEffect(() => {
+    if (!centerKey) return;
+    void loadFlights({ mode: "expand" });
+  }, [centerKey, radiusKm, loadFlights]);
 
   useEffect(() => {
     const ms = pick ? POLL_MS_PICKED : POLL_MS_IDLE;
-    const id = window.setInterval(() => void load({ silent: true }), ms);
+    const id = window.setInterval(
+      () => void loadFlights({ silent: true, mode: "poll" }),
+      ms
+    );
     return () => window.clearInterval(id);
-  }, [load, pick]);
-
-  const prevR = useRef(radiusKm);
-  useEffect(() => {
-    if (!center) return;
-    if (prevR.current === radiusKm) return;
-    prevR.current = radiusKm;
-    const t = window.setTimeout(() => void load({ silent: true }), 500);
-    return () => window.clearTimeout(t);
-  }, [radiusKm, center, load]);
+  }, [loadFlights, pick]);
 
   useEffect(() => {
     if (!ar) return;
@@ -498,7 +560,7 @@ export default function App() {
       setTrail([]);
     }
 
-    void load({ silent: true });
+    void loadFlights({ silent: true, mode: "poll" });
 
     void fetchFlightRoute(f.icao24, f.callsign, ac.signal)
       .then((r) => {
@@ -506,7 +568,7 @@ export default function App() {
         setRouteInfo(r);
         if (!autoVoiceRef.current) return;
         const fresh =
-          flightsRef.current.find((x) => x.icao24 === f.icao24) ?? f;
+          flightsPoolRef.current.find((x) => x.icao24 === f.icao24) ?? f;
         speakText(buildFlightSpeechBriefing(fresh, r));
       })
       .catch((e: unknown) => {
@@ -520,7 +582,7 @@ export default function App() {
         });
         if (!autoVoiceRef.current) return;
         const fresh =
-          flightsRef.current.find((x) => x.icao24 === f.icao24) ?? f;
+          flightsPoolRef.current.find((x) => x.icao24 === f.icao24) ?? f;
         speakText(buildFlightSpeechBriefing(fresh, null));
       })
       .finally(() => {
@@ -587,7 +649,7 @@ export default function App() {
           </button>
           <button
             type="button"
-            onClick={() => void load()}
+            onClick={() => void loadFlights({ mode: "refresh" })}
             disabled={loading || !center}
             className="min-h-11 min-w-11 rounded-full bg-white/10 flex items-center justify-center active:scale-95 disabled:opacity-40 touch-manipulation"
             aria-label="Atualizar"
@@ -693,7 +755,7 @@ export default function App() {
                 fillOpacity: 0.06,
               }}
             />
-            {flights
+            {displayFlights
               .filter((f) => f.icao24 !== pick?.icao24)
               .map(
                 (f) =>
