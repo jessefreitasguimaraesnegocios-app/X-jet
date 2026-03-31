@@ -70,10 +70,28 @@ L.Icon.Default.mergeOptions({
 
 const PLANE_SVG = `<svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M21 16v-2l-8-5V3.5c0-.83-.67-1.5-1.5-1.5S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z"/></svg>`;
 
-function planeIcon(deg: number, selected: boolean, isLight: boolean) {
-  const base = isLight ? "#0369a1" : "#3b82f6";
+/** Metros: 0–2500 azul, 2501–7000 verde, 7001+ roxo. Sem dado trata como baixa (azul). */
+function planeColorByAltitudeMeters(
+  altMeters: number | null,
+  isLight: boolean
+): string {
+  const a =
+    altMeters != null && Number.isFinite(altMeters) ? altMeters : 0;
+  if (a <= 2500) return isLight ? "#0369a1" : "#3b82f6";
+  if (a <= 7000) return isLight ? "#047857" : "#22c55e";
+  return isLight ? "#6d28d9" : "#a855f7";
+}
+
+function planeIcon(
+  deg: number,
+  selected: boolean,
+  isLight: boolean,
+  altitudeMeters: number | null
+) {
   const sel = "#dc2626";
-  const c = selected ? sel : base;
+  const c = selected
+    ? sel
+    : planeColorByAltitudeMeters(altitudeMeters, isLight);
   return L.divIcon({
     html: `<div style="transform:rotate(${deg}deg);color:${c};width:32px;height:32px">${PLANE_SVG}</div>`,
     className: "custom-plane-icon",
@@ -1152,7 +1170,8 @@ export default function App() {
                     icon={planeIcon(
                       f.trueTrack ?? 0,
                       trackedSet.has(f.icao24),
-                      isLight
+                      isLight,
+                      f.baroAltitude ?? f.geoAltitude ?? null
                     )}
                     eventHandlers={{
                       click: () => handlePlaneMarkerClick(f),
