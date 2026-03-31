@@ -312,6 +312,11 @@ export default function App() {
     );
   }, [airportsPool, center, radiusKm]);
 
+  const hasTrackedInsideRadius = useMemo(
+    () => displayFlights.some((f) => trackedSet.has(f.icao24)),
+    [displayFlights, trackedSet]
+  );
+
   const autoVoiceRef = useRef(autoVoice);
   autoVoiceRef.current = autoVoice;
 
@@ -1648,7 +1653,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {trackedIcao24s.length === 0 && (
+      {(trackedIcao24s.length === 0 || !hasTrackedInsideRadius) && (
         <div
           className="absolute left-0 right-0 z-[1000] bottom-[max(0.6rem,env(safe-area-inset-bottom))] md:left-6 md:right-auto md:bottom-6 md:w-52"
         >
