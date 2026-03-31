@@ -40,6 +40,7 @@ import {
   fetchAirports,
   filterAirportsWithinRadiusKm,
 } from "./services/airportService";
+import { CountryWithFlag } from "./lib/countryFlag";
 import {
   fetchFlightRoute,
   type FlightRouteInfo,
@@ -1153,9 +1154,11 @@ export default function App() {
                     <Popup>
                       <div className="p-1 min-w-[6rem]">
                         <p className="font-bold">{f.callsign}</p>
-                        <p className="text-xs opacity-75">{f.originCountry}</p>
-                        <p className="text-[10px] opacity-60 mt-1 leading-tight">
-                          1 toque: seguir / tirar · 2 toques: rota e 3D
+                        <p className="text-xs opacity-75">
+                          <CountryWithFlag
+                            name={f.originCountry}
+                            className="inline-flex items-center"
+                          />
                         </p>
                       </div>
                     </Popup>
@@ -1298,7 +1301,10 @@ export default function App() {
                       isLight ? "text-sky-700" : "text-blue-400"
                     )}
                   >
-                    {pickLive?.originCountry ?? pick.originCountry}
+                    <CountryWithFlag
+                      name={pickLive?.originCountry ?? pick.originCountry}
+                      className="inline-flex items-center"
+                    />
                     {(pickLive?.aircraftType ?? pick.aircraftType) && (
                       <span
                         className={cn(
