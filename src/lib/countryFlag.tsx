@@ -30,7 +30,9 @@ export function CountryWithFlag({
   name: string;
   className?: string;
 }) {
-  const flag = flagEmojiForOriginCountry(name);
+  const normalizedName = name?.trim() || "—";
+  const isUnknown = normalizedName === "—" || normalizedName === "N/A";
+  const flag = flagEmojiForOriginCountry(normalizedName) || (isUnknown ? "🏳️" : "");
   const classes = ["inline-flex items-center gap-1 align-middle", className]
     .filter(Boolean)
     .join(" ");
@@ -41,7 +43,7 @@ export function CountryWithFlag({
           {flag}
         </span>
       ) : null}
-      <span className="leading-none">{name}</span>
+      <span className="leading-none">{isUnknown ? "País desconhecido" : normalizedName}</span>
     </span>
   );
 }
