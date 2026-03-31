@@ -31,14 +31,17 @@ export function CountryWithFlag({
   className?: string;
 }) {
   const flag = flagEmojiForOriginCountry(name);
+  const classes = ["inline-flex items-center gap-1 align-middle", className]
+    .filter(Boolean)
+    .join(" ");
   return (
-    <span className={className}>
+    <span className={classes}>
       {flag ? (
-        <span className="mr-1.5 inline-block align-middle text-[1.05em] leading-none" aria-hidden>
+        <span className="shrink-0 text-[1.05em] leading-none" aria-hidden>
           {flag}
         </span>
       ) : null}
-      <span className="align-middle">{name}</span>
+      <span className="leading-none">{name}</span>
     </span>
   );
 }
