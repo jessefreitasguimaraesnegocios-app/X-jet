@@ -208,12 +208,15 @@ const POLL_MS_IDLE = 90_000;
 const POLL_MS_PICKED = 12_000;
 const TRAIL_MIN_DIST_DEG = 0.0008;
 const COMPASS_SMOOTH = 0.22;
+const MIN_RADIUS_KM = 10;
+const MAX_RADIUS_KM = 2000;
+const MAX_AIRPORTS_FETCH_RADIUS_KM = 350;
 /** Janela para distinguir 1 clique (só seguir) de 2 cliques (detalhes + 3D). */
 const PLANE_CLICK_DOUBLE_MS = 280;
 
 export default function App() {
   const [center, setCenter] = useState<[number, number] | null>(null);
-  const [radiusKm, setRadiusKm] = useState(100);
+  const [radiusKm, setRadiusKm] = useState(200);
   const [flightsPool, setFlightsPool] = useState<FlightState[]>([]);
   /** Voo com folha de detalhes / rota (duplo clique). */
   const [pick, setPick] = useState<FlightState | null>(null);
@@ -477,7 +480,12 @@ export default function App() {
         setFlightsPool(list);
         loadedRadiusRef.current = fetchR;
         setUpdated(new Date());
-        void fetchAirports(b, ac.signal)
+        const bAirports = boundsFromCenterRadiusKm(
+          pos[0],
+          pos[1],
+          Math.min(fetchR, MAX_AIRPORTS_FETCH_RADIUS_KM)
+        );
+        void fetchAirports(bAirports, ac.signal)
           .then((ap) => {
             if (!ac.signal.aborted) setAirportsPool(ap);
           })
@@ -1708,8 +1716,9 @@ export default function App() {
             </div>
             <input
               type="range"
-              min={10}
-              max={500}
+              min={MIN_RADIUS_KM}
+              max={MAX_RADIUS_KM}
+              step={10}
               value={radiusKm}
               onChange={(e) => setRadiusKm(+e.target.value)}
               className={cn(
