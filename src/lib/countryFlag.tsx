@@ -4,23 +4,16 @@ import type { LocaleData } from "i18n-iso-countries";
 
 countries.registerLocale(enLocale as LocaleData);
 
-function alpha2ToFlagEmoji(alpha2: string): string {
-  const c = alpha2.trim().toUpperCase();
-  if (!/^[A-Z]{2}$/.test(c)) return "";
-  const cp = (ch: string) => 0x1f1e6 + (ch.charCodeAt(0) - 65);
-  return String.fromCodePoint(cp(c[0]), cp(c[1]));
-}
-
 /** OpenSky-style origin country: English name, ISO alpha-2, or "—". */
-export function flagEmojiForOriginCountry(originCountry: string): string {
+export function alpha2ForOriginCountry(originCountry: string): string {
   const raw = originCountry?.trim();
   if (!raw || raw === "—" || raw === "N/A") return "";
   if (/^[A-Za-z]{2}$/.test(raw)) {
-    return alpha2ToFlagEmoji(raw);
+    return raw.toUpperCase();
   }
   const alpha2 = countries.getAlpha2Code(raw, "en");
   if (!alpha2) return "";
-  return alpha2ToFlagEmoji(alpha2);
+  return alpha2.toUpperCase();
 }
 
 export function CountryWithFlag({
@@ -32,17 +25,25 @@ export function CountryWithFlag({
 }) {
   const normalizedName = name?.trim() || "—";
   const isUnknown = normalizedName === "—" || normalizedName === "N/A";
-  const flag = flagEmojiForOriginCountry(normalizedName) || (isUnknown ? "🏳️" : "");
+  const alpha2 = alpha2ForOriginCountry(normalizedName);
+  const flagUrl = alpha2 ? `https://flagcdn.com/20x15/${alpha2.toLowerCase()}.png` : "";
   const classes = ["inline-flex items-center gap-1 align-middle", className]
     .filter(Boolean)
     .join(" ");
   return (
     <span className={classes}>
-      {flag ? (
+      {flagUrl ? (
+        <img
+          src={flagUrl}
+          alt={`Bandeira de ${normalizedName}`}
+          loading="lazy"
+          className="h-[12px] w-[16px] shrink-0 rounded-[2px] border border-black/15 object-cover"
+        />
+      ) : (
         <span className="shrink-0 text-[1.05em] leading-none" aria-hidden>
-          {flag}
+          🏳️
         </span>
-      ) : null}
+      )}
       <span className="leading-none">{isUnknown ? "País desconhecido" : normalizedName}</span>
     </span>
   );
