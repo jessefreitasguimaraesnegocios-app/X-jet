@@ -13,30 +13,35 @@ export async function fetchAirports(
     lomax: String(bounds.lomax),
   });
 
-  const res = await fetch(`/api/airports?${q}`, {
-    signal,
-    headers: { Accept: "application/json" },
-  });
+  try {
+    const res = await fetch(`/api/airports?${q}`, {
+      signal,
+      headers: { Accept: "application/json" },
+    });
 
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    throw new Error(
-      res.status === 429
-        ? "Muitas requisições. Aguarde um pouco."
-        : `Aeroportos indisponíveis (${res.status}). ${t.slice(0, 80)}`
+    if (!res.ok) {
+      const t = await res.text().catch(() => "");
+      throw new Error(
+        res.status === 429
+          ? "Muitas requisições. Aguarde um pouco."
+          : `Aeroportos indisponíveis (${res.status}). ${t.slice(0, 80)}`
+      );
+    }
+
+    const data = (await res.json()) as { airports?: AirportPoi[] };
+    if (!Array.isArray(data.airports)) return [];
+    return data.airports.filter(
+      (a) =>
+        a &&
+        typeof a.id === "string" &&
+        typeof a.name === "string" &&
+        typeof a.lat === "number" &&
+        typeof a.lon === "number"
     );
+  } catch (e: unknown) {
+    if (e instanceof DOMException && e.name === "AbortError") throw e;
+    return [];
   }
-
-  const data = (await res.json()) as { airports?: AirportPoi[] };
-  if (!Array.isArray(data.airports)) return [];
-  return data.airports.filter(
-    (a) =>
-      a &&
-      typeof a.id === "string" &&
-      typeof a.name === "string" &&
-      typeof a.lat === "number" &&
-      typeof a.lon === "number"
-  );
 }
 
 export function filterAirportsWithinRadiusKm(

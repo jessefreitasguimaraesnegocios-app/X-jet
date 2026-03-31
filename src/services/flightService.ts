@@ -19,23 +19,33 @@ export async function fetchFlights(
     lomax: String(bounds.lomax),
   });
 
-  const res = await fetch(`/api/flights?${q}`, {
-    signal,
-    headers: { Accept: "application/json" },
-  });
+  try {
+    const res = await fetch(`/api/flights?${q}`, {
+      signal,
+      headers: { Accept: "application/json" },
+    });
 
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    throw new Error(
-      res.status === 429
-        ? "Muitas requisições. Aguarde um pouco."
-        : `Voos indisponíveis (${res.status}). ${t.slice(0, 80)}`
-    );
+    if (!res.ok) {
+      const t = await res.text().catch(() => "");
+      throw new Error(
+        res.status === 429
+          ? "Muitas requisições. Aguarde um pouco."
+          : `Voos indisponíveis (${res.status}). ${t.slice(0, 80)}`
+      );
+    }
+
+    const data = (await res.json()) as { aircraft?: FlightState[] };
+    if (!Array.isArray(data.aircraft)) return [];
+    return data.aircraft;
+  } catch (e: unknown) {
+    if (e instanceof DOMException && e.name === "AbortError") throw e;
+    const msg = e instanceof Error ? e.message : "";
+    if (/failed to fetch/i.test(msg) || /networkerror/i.test(msg)) {
+      throw new Error("Sem conexão com o servidor de voos. Tente novamente.");
+    }
+    if (e instanceof Error) throw e;
+    throw new Error("Não foi possível carregar os voos agora.");
   }
-
-  const data = (await res.json()) as { aircraft?: FlightState[] };
-  if (!Array.isArray(data.aircraft)) return [];
-  return data.aircraft;
 }
 
 export function boundsFromCenterRadiusKm(
