@@ -1,10 +1,25 @@
-import { useMemo } from "react";
+import {
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Canvas } from "@react-three/fiber";
 import { ContactShadows, OrbitControls } from "@react-three/drei";
+import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { motion } from "motion/react";
-import { X } from "lucide-react";
+import { Minus, Plus, X } from "lucide-react";
 import { classifyAircraftType } from "../lib/aircraftModel";
 import { AircraftGltfModel } from "./AircraftGltfModel";
+
+const DOLLY_STEP = 1.12;
+
+type ZoomApi = {
+  zoomIn: () => void;
+  zoomOut: () => void;
+};
 
 function AircraftMesh({
   variant,
@@ -64,6 +79,84 @@ function AircraftMesh({
   );
 }
 
+function Aircraft3DScene({
+  procedural,
+  aircraftType,
+  callsign,
+  onZoomReady,
+}: {
+  procedural: ReactNode;
+  aircraftType: string | null | undefined;
+  callsign: string;
+  onZoomReady: (api: ZoomApi | null) => void;
+}) {
+  const orbitRef = useRef<OrbitControlsImpl>(null);
+
+  const bindZoom = useCallback(() => {
+    const ctrl = orbitRef.current;
+    if (!ctrl) {
+      onZoomReady(null);
+      return;
+    }
+    onZoomReady({
+      zoomIn: () => {
+        ctrl.dollyIn(DOLLY_STEP);
+        ctrl.update();
+      },
+      zoomOut: () => {
+        ctrl.dollyOut(DOLLY_STEP);
+        ctrl.update();
+      },
+    });
+  }, [onZoomReady]);
+
+  useLayoutEffect(() => {
+    bindZoom();
+    const t = window.requestAnimationFrame(() => bindZoom());
+    return () => {
+      window.cancelAnimationFrame(t);
+      onZoomReady(null);
+    };
+  }, [bindZoom, callsign, onZoomReady]);
+
+  return (
+    <>
+      <color attach="background" args={["#0a0f18"]} />
+      <ambientLight intensity={0.42} />
+      <directionalLight
+        position={[5, 8, 5]}
+        intensity={1.05}
+        castShadow
+        shadow-mapSize={[1024, 1024]}
+      />
+      <spotLight position={[-4, 4, 2]} intensity={0.32} angle={0.45} />
+      <AircraftGltfModel
+        key={callsign}
+        aircraftType={aircraftType}
+        fallback={procedural}
+      />
+      <ContactShadows
+        position={[0, -0.92, 0]}
+        opacity={0.38}
+        scale={44}
+        blur={2.8}
+        far={14}
+      />
+      <OrbitControls
+        ref={orbitRef}
+        enablePan={false}
+        enableZoom
+        minPolarAngle={0.35}
+        maxPolarAngle={Math.PI - 0.35}
+        minDistance={6.8}
+        maxDistance={28}
+        enableDamping
+        dampingFactor={0.08}
+      />
+    </>
+  );
+}
+
 type Props = {
   aircraftType: string | null | undefined;
   callsign: string;
@@ -84,6 +177,11 @@ export default function Aircraft3DOverlay({
     [variant]
   );
 
+  const [zoomApi, setZoomApi] = useState<ZoomApi | null>(null);
+  const onZoomReady = useCallback((api: ZoomApi | null) => {
+    setZoomApi(api);
+  }, []);
+
   return (
     <div className="pointer-events-none absolute inset-0 z-[985] flex items-center justify-center px-3">
       <motion.div
@@ -103,45 +201,41 @@ export default function Aircraft3DOverlay({
         >
           <X className="w-4 h-4" />
         </button>
+        <div className="absolute left-2 top-11 z-20 flex flex-col gap-1 pointer-events-auto">
+          <button
+            type="button"
+            onClick={() => zoomApi?.zoomIn()}
+            className="w-9 h-9 rounded-lg bg-black/55 border border-white/20 text-white flex items-center justify-center active:scale-95 shadow-md"
+            title="Aproximar (zoom)"
+            aria-label="Aproximar modelo 3D"
+          >
+            <Plus className="w-5 h-5" strokeWidth={2.5} />
+          </button>
+          <button
+            type="button"
+            onClick={() => zoomApi?.zoomOut()}
+            className="w-9 h-9 rounded-lg bg-black/55 border border-white/20 text-white flex items-center justify-center active:scale-95 shadow-md"
+            title="Afastar (zoom)"
+            aria-label="Afastar modelo 3D"
+          >
+            <Minus className="w-5 h-5" strokeWidth={2.5} />
+          </button>
+        </div>
         <Canvas
           shadows
-          camera={{ position: [2.65, 1.45, 3.05], fov: 42 }}
+          camera={{ position: [10.2, 5.5, 10.7], fov: 34 }}
           gl={{ alpha: false, antialias: true }}
         >
-          <color attach="background" args={["#0a0f18"]} />
-          <ambientLight intensity={0.42} />
-          <directionalLight
-            position={[5, 8, 5]}
-            intensity={1.05}
-            castShadow
-            shadow-mapSize={[1024, 1024]}
-          />
-          <spotLight position={[-4, 4, 2]} intensity={0.32} angle={0.45} />
-          <AircraftGltfModel
-            key={callsign}
+          <Aircraft3DScene
+            procedural={procedural}
             aircraftType={aircraftType}
-            fallback={procedural}
-          />
-          <ContactShadows
-            position={[0, -0.92, 0]}
-            opacity={0.45}
-            scale={14}
-            blur={2.4}
-            far={5}
-          />
-          <OrbitControls
-            enablePan={false}
-            minPolarAngle={0.35}
-            maxPolarAngle={Math.PI - 0.35}
-            minDistance={2.1}
-            maxDistance={6.5}
-            enableDamping
-            dampingFactor={0.08}
+            callsign={callsign}
+            onZoomReady={onZoomReady}
           />
         </Canvas>
         <div className="absolute bottom-2 left-0 right-0 px-2 text-center space-y-0.5 pointer-events-none">
           <p className="text-[10px] text-neutral-500 uppercase tracking-widest">
-            Arraste para girar · 360°
+            Arraste para girar · Botões ou scroll para zoom
           </p>
           <p className="text-xs font-mono text-blue-300/90 truncate">{callsign}</p>
           {aircraftType ? (
