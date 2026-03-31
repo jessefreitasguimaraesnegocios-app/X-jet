@@ -53,7 +53,7 @@ import {
   lerpAngleDeg,
   parseDeviceHeading,
 } from "./lib/deviceCompass";
-import { useLerpedLatLng } from "./hooks/useLerpedLatLng";
+import { useSmoothedFlightPositionsMap } from "./hooks/useSmoothedFlightPositionsMap";
 import { CompassHud } from "./components/CompassHud";
 
 const Aircraft3DOverlay = lazy(
@@ -342,11 +342,12 @@ export default function App() {
       ? [primaryFollowFlight.latitude, primaryFollowFlight.longitude]
       : null;
 
-  const primaryAnimPos = useLerpedLatLng(
-    pickTargetPos,
-    primaryFollowIcao24,
-    1100
-  );
+  const smoothedPlanePositions = useSmoothedFlightPositionsMap(displayFlights);
+
+  const primaryFollowMapPos: [number, number] | null = useMemo(() => {
+    if (!primaryFollowIcao24 || !pickTargetPos) return null;
+    return smoothedPlanePositions.get(primaryFollowIcao24) ?? pickTargetPos;
+  }, [primaryFollowIcao24, pickTargetPos, smoothedPlanePositions]);
 
   const compassTargetFlight = useMemo(() => {
     if (pickDetailOpen && pickLive) return pickLive;
@@ -1090,9 +1091,9 @@ export default function App() {
               snapToUser={!(followPlane && primaryFollowIcao24)}
             />
             <MapFollowPlane
-              pos={pickTargetPos}
+              pos={primaryFollowMapPos}
               enabled={Boolean(
-                followPlane && primaryFollowIcao24 && pickTargetPos
+                followPlane && primaryFollowIcao24 && primaryFollowMapPos
               )}
             />
             <Marker position={center} icon={userPositionIcon(isLight)}>
@@ -1143,9 +1144,10 @@ export default function App() {
                   <Marker
                     key={f.icao24}
                     position={
-                      f.icao24 === primaryFollowIcao24
-                        ? (primaryAnimPos ?? [f.latitude, f.longitude])
-                        : [f.latitude, f.longitude]
+                      smoothedPlanePositions.get(f.icao24) ?? [
+                        f.latitude,
+                        f.longitude,
+                      ]
                     }
                     icon={planeIcon(
                       f.trueTrack ?? 0,
