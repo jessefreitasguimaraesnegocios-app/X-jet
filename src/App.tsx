@@ -48,7 +48,12 @@ import { speakText } from "./services/ttsService";
 import type { AirportPoi, FlightState } from "./types";
 import { cn } from "./lib/utils";
 import { buildFlightSpeechBriefing } from "./lib/flightSpeech";
+import {
+  lerpAngleDeg,
+  parseDeviceHeading,
+} from "./lib/deviceCompass";
 import { useLerpedLatLng } from "./hooks/useLerpedLatLng";
+import { CompassHud } from "./components/CompassHud";
 
 const Aircraft3DOverlay = lazy(
   () => import("./components/Aircraft3DOverlay")
@@ -201,18 +206,32 @@ const SP_FALLBACK: [number, number] = [-23.5505, -46.6333];
 const POLL_MS_IDLE = 90_000;
 const POLL_MS_PICKED = 12_000;
 const TRAIL_MIN_DIST_DEG = 0.0008;
+const COMPASS_SMOOTH = 0.22;
+/** Janela para distinguir 1 clique (só seguir) de 2 cliques (detalhes + 3D). */
+const PLANE_CLICK_DOUBLE_MS = 280;
 
 export default function App() {
   const [center, setCenter] = useState<[number, number] | null>(null);
   const [radiusKm, setRadiusKm] = useState(100);
   const [flightsPool, setFlightsPool] = useState<FlightState[]>([]);
+  /** Voo com folha de detalhes / rota (duplo clique). */
   const [pick, setPick] = useState<FlightState | null>(null);
-  const [trail, setTrail] = useState<[number, number][]>([]);
+  /** ICAO24 em seguimento (1 clique); vários ao mesmo tempo, ordem = prioridade visual. */
+  const [trackedIcao24s, setTrackedIcao24s] = useState<string[]>([]);
+  const [trailsByIcao, setTrailsByIcao] = useState<
+    Record<string, [number, number][]>
+  >({});
+  /** Avião que o mapa centraliza quando “Seguir” está ligado. */
+  const [primaryFollowIcao24, setPrimaryFollowIcao24] = useState<string | null>(
+    null
+  );
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [updated, setUpdated] = useState(() => new Date());
   const [ar, setAr] = useState(false);
-  const [heading, setHeading] = useState<number | null>(null);
+  const [compassHeading, setCompassHeading] = useState<number | null>(null);
+  const [compassAccuracy, setCompassAccuracy] = useState<number | null>(null);
+  const compassSmoothRef = useRef<number | null>(null);
   const [geoLoading, setGeoLoading] = useState(false);
   const [geoBanner, setGeoBanner] = useState<string | null>(null);
   const [routeInfo, setRouteInfo] = useState<FlightRouteInfo | null>(null);
@@ -224,6 +243,8 @@ export default function App() {
     readStoredBool(LS_FOLLOW_PLANE, true)
   );
   const [show3D, setShow3D] = useState(true);
+  /** Folha inferior, rota e 3D só após duplo clique no avião. */
+  const [pickDetailOpen, setPickDetailOpen] = useState(false);
   const [sheetSnap, setSheetSnap] = useState<0 | 1 | 2>(1);
   const [isLight, setIsLight] = useState(() => readStoredLight());
   const [airportsPool, setAirportsPool] = useState<AirportPoi[]>([]);
@@ -232,11 +253,15 @@ export default function App() {
   const centerRef = useRef(center);
   const abortRef = useRef<AbortController | null>(null);
   const routeAbortRef = useRef<AbortController | null>(null);
-  const trailPickRef = useRef<string | null>(null);
+  const trackedIcao24sRef = useRef<string[]>([]);
   const loadedRadiusRef = useRef(0);
   const flightsPoolRef = useRef<FlightState[]>([]);
   const radiusKmRef = useRef(radiusKm);
   const flightCacheCenterKeyRef = useRef<string | null>(null);
+  const planeClickPendingRef = useRef<{
+    timer: number;
+    flight: FlightState;
+  } | null>(null);
 
   useEffect(() => {
     centerRef.current = center;
@@ -249,6 +274,15 @@ export default function App() {
   useEffect(() => {
     flightsPoolRef.current = flightsPool;
   }, [flightsPool]);
+
+  useEffect(() => {
+    trackedIcao24sRef.current = trackedIcao24s;
+  }, [trackedIcao24s]);
+
+  const trackedSet = useMemo(
+    () => new Set(trackedIcao24s),
+    [trackedIcao24s]
+  );
 
   const centerKey = useMemo(
     () =>
@@ -286,16 +320,29 @@ export default function App() {
     return flightsPool.find((x) => x.icao24 === pick.icao24) ?? pick;
   }, [pick, flightsPool]);
 
+  const primaryFollowFlight = useMemo(() => {
+    if (!primaryFollowIcao24) return null;
+    return (
+      flightsPool.find((x) => x.icao24 === primaryFollowIcao24) ?? null
+    );
+  }, [primaryFollowIcao24, flightsPool]);
+
   const pickTargetPos: [number, number] | null =
-    pickLive?.latitude != null && pickLive?.longitude != null
-      ? [pickLive.latitude, pickLive.longitude]
+    primaryFollowFlight?.latitude != null &&
+    primaryFollowFlight?.longitude != null
+      ? [primaryFollowFlight.latitude, primaryFollowFlight.longitude]
       : null;
 
-  const pickAnimPos = useLerpedLatLng(
+  const primaryAnimPos = useLerpedLatLng(
     pickTargetPos,
-    pick?.icao24 ?? null,
+    primaryFollowIcao24,
     1100
   );
+
+  const compassTargetFlight = useMemo(() => {
+    if (pickDetailOpen && pickLive) return pickLive;
+    return primaryFollowFlight;
+  }, [pickDetailOpen, pickLive, primaryFollowFlight]);
 
   useEffect(() => {
     if (!pick) return;
@@ -319,44 +366,59 @@ export default function App() {
   }, [flightsPool, pick?.icao24]);
 
   useEffect(() => {
-    if (pick?.icao24) setSheetSnap(1);
-  }, [pick?.icao24]);
+    if (pick?.icao24 && pickDetailOpen) setSheetSnap(1);
+  }, [pick?.icao24, pickDetailOpen]);
 
   useEffect(() => {
-    if (!pickLive || pickLive.latitude == null || pickLive.longitude == null) {
-      if (!pick) {
-        setTrail([]);
-        trailPickRef.current = null;
-      }
+    return () => {
+      const p = planeClickPendingRef.current;
+      if (p) clearTimeout(p.timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (trackedIcao24s.length === 0) {
+      setTrailsByIcao({});
       return;
     }
-    const { icao24 } = pickLive;
-    const lat = pickLive.latitude;
-    const lon = pickLive.longitude;
-
-    if (trailPickRef.current !== icao24) {
-      trailPickRef.current = icao24;
-      setTrail([[lat, lon]]);
-      return;
-    }
-
-    setTrail((prev) => {
-      const last = prev[prev.length - 1];
-      if (last) {
+    setTrailsByIcao((prev) => {
+      const next: Record<string, [number, number][]> = {};
+      for (const icao of trackedIcao24s) {
+        const fl = flightsPool.find((x) => x.icao24 === icao);
+        const past = prev[icao];
+        if (!fl || fl.latitude == null || fl.longitude == null) {
+          if (past?.length) next[icao] = past;
+          continue;
+        }
+        const lat = fl.latitude;
+        const lon = fl.longitude;
+        if (!past || past.length === 0) {
+          next[icao] = [[lat, lon]];
+          continue;
+        }
+        const last = past[past.length - 1];
         const dLat = lat - last[0];
         const dLon = lon - last[1];
-        if (dLat * dLat + dLon * dLon < TRAIL_MIN_DIST_DEG * TRAIL_MIN_DIST_DEG) {
-          return prev;
+        if (
+          dLat * dLat + dLon * dLon <
+          TRAIL_MIN_DIST_DEG * TRAIL_MIN_DIST_DEG
+        ) {
+          next[icao] = past;
+        } else {
+          next[icao] = [...past, [lat, lon] as [number, number]].slice(-160);
         }
       }
-      return [...prev, [lat, lon] as [number, number]].slice(-160);
+      return next;
     });
-  }, [
-    pick,
-    pickLive?.icao24,
-    pickLive?.latitude,
-    pickLive?.longitude,
-  ]);
+  }, [flightsPool, trackedIcao24s]);
+
+  useEffect(() => {
+    setPrimaryFollowIcao24((cur) => {
+      if (trackedIcao24s.length === 0) return null;
+      if (cur != null && trackedIcao24s.includes(cur)) return cur;
+      return trackedIcao24s[trackedIcao24s.length - 1] ?? null;
+    });
+  }, [trackedIcao24s]);
 
   const loadFlights = useCallback(
     async (opts?: {
@@ -553,24 +615,48 @@ export default function App() {
   }, [centerKey, radiusKm, loadFlights]);
 
   useEffect(() => {
-    const ms = pick ? POLL_MS_PICKED : POLL_MS_IDLE;
+    const ms =
+      trackedIcao24sRef.current.length > 0 || pick
+        ? POLL_MS_PICKED
+        : POLL_MS_IDLE;
     const id = window.setInterval(
       () => void loadFlights({ silent: true, mode: "poll" }),
       ms
     );
     return () => window.clearInterval(id);
-  }, [loadFlights, pick]);
+  }, [loadFlights, pick, trackedIcao24s.length]);
 
   useEffect(() => {
-    if (!ar) return;
+    if (!ar) {
+      compassSmoothRef.current = null;
+      setCompassHeading(null);
+      setCompassAccuracy(null);
+      return;
+    }
     const onOri = (e: DeviceOrientationEvent) => {
-      const w = (e as unknown as { webkitCompassHeading?: number })
-        .webkitCompassHeading;
-      if (w != null) setHeading(w);
-      else if (e.alpha != null) setHeading(360 - e.alpha);
+      const parsed = parseDeviceHeading(e);
+      if (!parsed) return;
+      const prev = compassSmoothRef.current;
+      const next =
+        prev == null
+          ? parsed.heading
+          : lerpAngleDeg(prev, parsed.heading, COMPASS_SMOOTH);
+      compassSmoothRef.current = next;
+      setCompassHeading(next);
+      if (
+        parsed.accuracyDeg !== undefined &&
+        Number.isFinite(parsed.accuracyDeg)
+      ) {
+        setCompassAccuracy(parsed.accuracyDeg);
+      }
     };
+    window.addEventListener("deviceorientationabsolute", onOri, true);
     window.addEventListener("deviceorientation", onOri, true);
-    return () => window.removeEventListener("deviceorientation", onOri, true);
+    return () => {
+      window.removeEventListener("deviceorientationabsolute", onOri, true);
+      window.removeEventListener("deviceorientation", onOri, true);
+      compassSmoothRef.current = null;
+    };
   }, [ar]);
 
   const toggleAr = async () => {
@@ -592,69 +678,129 @@ export default function App() {
     setAr(true);
   };
 
-  const onPick = (f: FlightState) => {
-    if (pick?.icao24 === f.icao24) {
-      const next = !followPlane;
-      setFollowPlane(next);
+  const onPlaneSingleClick = useCallback(
+    (f: FlightState) => {
+      const current = trackedIcao24sRef.current;
+      const already = current.includes(f.icao24);
+      if (already) {
+        setTrackedIcao24s((prev) => prev.filter((x) => x !== f.icao24));
+        setTrailsByIcao((t) => {
+          const n = { ...t };
+          delete n[f.icao24];
+          return n;
+        });
+        if (pick?.icao24 === f.icao24) {
+          routeAbortRef.current?.abort();
+          setPick(null);
+          setPickDetailOpen(false);
+          setShow3D(false);
+          setRouteInfo(null);
+          setRouteLoading(false);
+        }
+        return;
+      }
+
+      setTrackedIcao24s((prev) => [...prev, f.icao24]);
+      setPrimaryFollowIcao24(f.icao24);
+      setFollowPlane(true);
       try {
-        localStorage.setItem(LS_FOLLOW_PLANE, next ? "true" : "false");
+        localStorage.setItem(LS_FOLLOW_PLANE, "true");
       } catch {
         /* ignore */
       }
-      return;
-    }
+      if (f.latitude != null && f.longitude != null) {
+        setTrailsByIcao((t) => ({
+          ...t,
+          [f.icao24]: t[f.icao24] ?? [[f.latitude, f.longitude]],
+        }));
+      }
+      void loadFlights({ silent: true, mode: "poll" });
+    },
+    [pick?.icao24, loadFlights]
+  );
 
-    routeAbortRef.current?.abort();
-    const ac = new AbortController();
-    routeAbortRef.current = ac;
+  const onOpenFlightDetail = useCallback(
+    (f: FlightState) => {
+      routeAbortRef.current?.abort();
+      const ac = new AbortController();
+      routeAbortRef.current = ac;
 
-    setPick(f);
-    setShow3D(true);
-    setFollowPlane(true);
-    try {
-      localStorage.setItem(LS_FOLLOW_PLANE, "true");
-    } catch {
-      /* ignore */
-    }
-    setRouteInfo(null);
-    setRouteLoading(true);
-    trailPickRef.current = null;
-    if (f.latitude != null && f.longitude != null) {
-      setTrail([[f.latitude, f.longitude]]);
-      trailPickRef.current = f.icao24;
-    } else {
-      setTrail([]);
-    }
+      setTrackedIcao24s((prev) =>
+        prev.includes(f.icao24) ? prev : [...prev, f.icao24]
+      );
+      setPrimaryFollowIcao24(f.icao24);
+      setPick(f);
+      setPickDetailOpen(true);
+      setShow3D(true);
+      setFollowPlane(true);
+      try {
+        localStorage.setItem(LS_FOLLOW_PLANE, "true");
+      } catch {
+        /* ignore */
+      }
+      setRouteInfo(null);
+      setRouteLoading(true);
+      if (f.latitude != null && f.longitude != null) {
+        setTrailsByIcao((t) => ({
+          ...t,
+          [f.icao24]: t[f.icao24] ?? [[f.latitude, f.longitude]],
+        }));
+      }
 
-    void loadFlights({ silent: true, mode: "poll" });
+      void loadFlights({ silent: true, mode: "poll" });
 
-    void fetchFlightRoute(f.icao24, f.callsign, ac.signal)
-      .then((r) => {
-        if (ac.signal.aborted) return;
-        setRouteInfo(r);
-        if (!autoVoiceRef.current) return;
-        const fresh =
-          flightsPoolRef.current.find((x) => x.icao24 === f.icao24) ?? f;
-        speakText(buildFlightSpeechBriefing(fresh, r));
-      })
-      .catch((e: unknown) => {
-        if (ac.signal.aborted) return;
-        if (e instanceof Error && e.name === "AbortError") return;
-        setRouteInfo({
-          departure: null,
-          arrival: null,
-          departureName: null,
-          arrivalName: null,
+      void fetchFlightRoute(f.icao24, f.callsign, ac.signal)
+        .then((r) => {
+          if (ac.signal.aborted) return;
+          setRouteInfo(r);
+          if (!autoVoiceRef.current) return;
+          const fresh =
+            flightsPoolRef.current.find((x) => x.icao24 === f.icao24) ?? f;
+          speakText(buildFlightSpeechBriefing(fresh, r));
+        })
+        .catch((e: unknown) => {
+          if (ac.signal.aborted) return;
+          if (e instanceof Error && e.name === "AbortError") return;
+          setRouteInfo({
+            departure: null,
+            arrival: null,
+            departureName: null,
+            arrivalName: null,
+          });
+          if (!autoVoiceRef.current) return;
+          const fresh =
+            flightsPoolRef.current.find((x) => x.icao24 === f.icao24) ?? f;
+          speakText(buildFlightSpeechBriefing(fresh, null));
+        })
+        .finally(() => {
+          if (!ac.signal.aborted) setRouteLoading(false);
         });
-        if (!autoVoiceRef.current) return;
-        const fresh =
-          flightsPoolRef.current.find((x) => x.icao24 === f.icao24) ?? f;
-        speakText(buildFlightSpeechBriefing(fresh, null));
-      })
-      .finally(() => {
-        if (!ac.signal.aborted) setRouteLoading(false);
-      });
-  };
+    },
+    [loadFlights]
+  );
+
+  const handlePlaneMarkerClick = useCallback(
+    (f: FlightState) => {
+      const pending = planeClickPendingRef.current;
+      if (pending) {
+        clearTimeout(pending.timer);
+        if (pending.flight.icao24 === f.icao24) {
+          planeClickPendingRef.current = null;
+          onOpenFlightDetail(f);
+          return;
+        }
+        onPlaneSingleClick(pending.flight);
+      }
+      planeClickPendingRef.current = {
+        timer: window.setTimeout(() => {
+          planeClickPendingRef.current = null;
+          onPlaneSingleClick(f);
+        }, PLANE_CLICK_DOUBLE_MS),
+        flight: f,
+      };
+    },
+    [onPlaneSingleClick, onOpenFlightDetail]
+  );
 
   const bearing = (f: FlightState) => {
     if (!center || f.latitude == null || f.longitude == null) return 0;
@@ -668,12 +814,13 @@ export default function App() {
     return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
   };
 
-  const selectedBearing = pickLive ? bearing(pickLive) : null;
-  const northIndicatorDeg = heading != null ? -heading : 0;
-  const targetIndicatorDeg =
-    heading != null && selectedBearing != null
-      ? ((selectedBearing - heading + 540) % 360) - 180
-      : 0;
+  const selectedBearing =
+    compassTargetFlight &&
+    center &&
+    compassTargetFlight.latitude != null &&
+    compassTargetFlight.longitude != null
+      ? bearing(compassTargetFlight)
+      : null;
 
   return (
     <div
@@ -817,16 +964,22 @@ export default function App() {
             type="button"
             onClick={() => void toggleAr()}
             className={cn(
-              "min-h-11 min-w-11 rounded-full flex items-center justify-center active:scale-95 touch-manipulation border",
+              "min-h-11 min-w-11 rounded-full flex items-center justify-center active:scale-95 touch-manipulation border transition-all duration-200",
               ar
-                ? "bg-red-600 text-white border-red-500"
+                ? "bg-gradient-to-br from-rose-600 via-amber-600 to-amber-700 text-white border-amber-400/50 shadow-lg shadow-rose-900/35 ring-2 ring-amber-300/35"
                 : isLight
-                  ? "bg-stone-200/90 text-stone-800 border-stone-400/40"
-                  : "bg-white/10 border-transparent"
+                  ? "bg-gradient-to-br from-amber-50 via-stone-50 to-stone-200/95 text-amber-950 border-amber-300/55 shadow-md shadow-amber-900/10"
+                  : "bg-gradient-to-br from-slate-700/90 to-slate-900 text-amber-200 border-amber-500/25 shadow-md shadow-black/40"
             )}
-            aria-label="Bússola"
+            title={ar ? "Fechar bússola" : "Bússola e direção do voo"}
+            aria-label={ar ? "Fechar modo bússola" : "Abrir modo bússola"}
+            aria-pressed={ar}
           >
-            {ar ? <MapIcon className="w-5 h-5" /> : <Compass className="w-5 h-5" />}
+            {ar ? (
+              <MapIcon className="w-5 h-5 drop-shadow" strokeWidth={2.25} />
+            ) : (
+              <Compass className="w-5 h-5" strokeWidth={2.25} />
+            )}
           </button>
         </div>
       </header>
@@ -920,11 +1073,13 @@ export default function App() {
             />
             <MapCenter
               c={center}
-              snapToUser={!(followPlane && pick)}
+              snapToUser={!(followPlane && primaryFollowIcao24)}
             />
             <MapFollowPlane
               pos={pickTargetPos}
-              enabled={Boolean(followPlane && pick && pickTargetPos)}
+              enabled={Boolean(
+                followPlane && primaryFollowIcao24 && pickTargetPos
+              )}
             />
             <Marker position={center} icon={userPositionIcon(isLight)}>
               <Popup>Você</Popup>
@@ -967,58 +1122,57 @@ export default function App() {
                 </Popup>
               </Marker>
             ))}
-            {displayFlights
-              .filter((f) => f.icao24 !== pick?.icao24)
-              .map(
-                (f) =>
-                  f.latitude != null &&
-                  f.longitude != null && (
-                    <Marker
-                      key={f.icao24}
-                      position={[f.latitude, f.longitude]}
-                      icon={planeIcon(f.trueTrack ?? 0, false, isLight)}
-                      eventHandlers={{ click: () => onPick(f) }}
-                    >
-                      <Popup>
-                        <div className="p-1 min-w-[6rem]">
-                          <p className="font-bold">{f.callsign}</p>
-                          <p className="text-xs opacity-75">{f.originCountry}</p>
-                        </div>
-                      </Popup>
-                    </Marker>
-                  )
-              )}
-            {pick &&
-              pickTargetPos &&
-              pickLive?.latitude != null &&
-              pickLive?.longitude != null && (
-                <Marker
-                  key={`pick-${pick.icao24}`}
-                  position={pickAnimPos ?? pickTargetPos}
-                  icon={planeIcon(pickLive.trueTrack ?? 0, true, isLight)}
-                  eventHandlers={{
-                    click: () => onPick(pickLive),
-                  }}
-                >
-                  <Popup>
-                    <div className="p-1 min-w-[6rem]">
-                      <p className="font-bold">{pickLive.callsign}</p>
-                      <p className="text-xs opacity-75">{pickLive.originCountry}</p>
-                    </div>
-                  </Popup>
-                </Marker>
-              )}
-            {trail.length >= 2 && (
-              <Polyline
-                positions={trail}
-                pathOptions={{ color: "#ef4444", weight: 3, opacity: 0.85 }}
-              />
+            {displayFlights.map(
+              (f) =>
+                f.latitude != null &&
+                f.longitude != null && (
+                  <Marker
+                    key={f.icao24}
+                    position={
+                      f.icao24 === primaryFollowIcao24
+                        ? (primaryAnimPos ?? [f.latitude, f.longitude])
+                        : [f.latitude, f.longitude]
+                    }
+                    icon={planeIcon(
+                      f.trueTrack ?? 0,
+                      trackedSet.has(f.icao24),
+                      isLight
+                    )}
+                    eventHandlers={{
+                      click: () => handlePlaneMarkerClick(f),
+                      dblclick: (e) => {
+                        L.DomEvent.stopPropagation(e);
+                      },
+                    }}
+                  >
+                    <Popup>
+                      <div className="p-1 min-w-[6rem]">
+                        <p className="font-bold">{f.callsign}</p>
+                        <p className="text-xs opacity-75">{f.originCountry}</p>
+                        <p className="text-[10px] opacity-60 mt-1 leading-tight">
+                          1 toque: seguir / tirar · 2 toques: rota e 3D
+                        </p>
+                      </div>
+                    </Popup>
+                  </Marker>
+                )
             )}
+            {trackedIcao24s.map((icao) => {
+              const pts = trailsByIcao[icao];
+              if (!pts || pts.length < 2) return null;
+              return (
+                <Polyline
+                  key={`trail-${icao}`}
+                  positions={pts}
+                  pathOptions={{ color: "#ef4444", weight: 3, opacity: 0.85 }}
+                />
+              );
+            })}
           </MapContainer>
         )}
       </div>
 
-      {pick && show3D && (
+      {pick && pickDetailOpen && show3D && (
         <Suspense fallback={null}>
           <Aircraft3DOverlay
             aircraftType={pickLive?.aircraftType ?? pick.aircraftType}
@@ -1053,7 +1207,7 @@ export default function App() {
       )}
 
       <AnimatePresence>
-        {pick && (
+        {pick && pickDetailOpen && (
           <motion.div
             key="flight-sheet"
             initial={{ y: "100%" }}
@@ -1157,9 +1311,10 @@ export default function App() {
                   onClick={() => {
                     routeAbortRef.current?.abort();
                     setPick(null);
+                    setPickDetailOpen(false);
+                    setShow3D(false);
                     setRouteInfo(null);
-                    setTrail([]);
-                    trailPickRef.current = null;
+                    setRouteLoading(false);
                   }}
                   className={cn(
                     "shrink-0 w-11 h-11 rounded-full flex items-center justify-center active:scale-95 border",
@@ -1475,62 +1630,25 @@ export default function App() {
       <AnimatePresence>
         {ar && (
           <motion.div
+            key="compass-shell"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className={cn(
-              "absolute inset-0 z-[1500] pointer-events-none flex flex-col items-center justify-center px-4",
-              isLight ? "bg-stone-900/25" : "bg-black/50"
-            )}
-            style={{
-              paddingBottom: "max(1rem, env(safe-area-inset-bottom))",
-            }}
+            transition={{ duration: 0.22 }}
+            className="absolute inset-0 z-[1500] pointer-events-none"
           >
-            <div
-              className={cn(
-                "relative rounded-full border-2 flex items-center justify-center w-[min(17rem,82vw)] h-[min(17rem,82vw)] md:w-72 md:h-72",
-                isLight
-                  ? "border-stone-400/50 bg-white/20 shadow-inner"
-                  : "border-white/25"
-              )}
-            >
-              <span className="absolute top-1 left-1/2 -translate-x-1/2 text-red-500 font-black text-sm">
-                N
-              </span>
-              {!pick ? (
-                <div
-                  className="absolute inset-0 transition-transform duration-100"
-                  style={{ transform: `rotate(${northIndicatorDeg}deg)` }}
-                >
-                  <div className="absolute inset-0 flex justify-center">
-                    <div className="w-1 h-16 mt-3 rounded-full bg-gradient-to-t from-transparent via-blue-500 to-cyan-300" />
-                  </div>
-                </div>
-              ) : (
-                <div
-                  className="absolute inset-0 transition-transform duration-100"
-                  style={{ transform: `rotate(${targetIndicatorDeg}deg)` }}
-                >
-                  <div className="absolute inset-0 flex justify-center">
-                    <div className="w-1.5 h-20 mt-2 rounded-full bg-gradient-to-t from-transparent via-emerald-400 to-red-500" />
-                  </div>
-                </div>
-              )}
-              <div className="w-0.5 h-16 bg-gradient-to-t from-transparent to-red-500 rounded-full" />
-            </div>
-            <p
-              className={cn(
-                "mt-6 text-lg font-bold drop-shadow-sm",
-                isLight ? "text-stone-900" : "text-white"
-              )}
-            >
-              {pick ? `Apontando para ${pick.callsign}` : "Apontando para o Norte"}
-            </p>
+            <CompassHud
+              isLight={isLight}
+              pick={compassTargetFlight}
+              headingDeg={compassHeading}
+              targetBearingDeg={selectedBearing}
+              accuracyDeg={compassAccuracy}
+            />
           </motion.div>
         )}
       </AnimatePresence>
 
-      {!pick && (
+      {trackedIcao24s.length === 0 && (
         <div
           className="absolute left-0 right-0 z-[1000] bottom-[max(0.6rem,env(safe-area-inset-bottom))] md:left-6 md:right-auto md:bottom-6 md:w-52"
         >
