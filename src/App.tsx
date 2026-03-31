@@ -1157,6 +1157,7 @@ export default function App() {
                         <p className="text-xs opacity-75">
                           <CountryWithFlag
                             name={f.originCountry}
+                            callsign={f.callsign}
                             className="inline-flex items-center"
                           />
                         </p>
@@ -1303,6 +1304,7 @@ export default function App() {
                   >
                     <CountryWithFlag
                       name={pickLive?.originCountry ?? pick.originCountry}
+                      callsign={pickLive?.callsign ?? pick.callsign}
                       className="inline-flex items-center"
                     />
                     {(pickLive?.aircraftType ?? pick.aircraftType) && (

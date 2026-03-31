@@ -4,6 +4,12 @@ import type { LocaleData } from "i18n-iso-countries";
 
 countries.registerLocale(enLocale as LocaleData);
 
+const CALLSIGN_PREFIX_TO_COUNTRY: Record<string, { alpha2: string; name: string }> = {
+  AZU: { alpha2: "BR", name: "Brazil" },
+  GLO: { alpha2: "BR", name: "Brazil" },
+  TAM: { alpha2: "BR", name: "Brazil" },
+};
+
 /** OpenSky-style origin country: English name, ISO alpha-2, or "—". */
 export function alpha2ForOriginCountry(originCountry: string): string {
   const raw = originCountry?.trim();
@@ -18,14 +24,22 @@ export function alpha2ForOriginCountry(originCountry: string): string {
 
 export function CountryWithFlag({
   name,
+  callsign,
   className,
 }: {
   name: string;
+  callsign?: string;
   className?: string;
 }) {
   const normalizedName = name?.trim() || "—";
-  const isUnknown = normalizedName === "—" || normalizedName === "N/A";
-  const alpha2 = alpha2ForOriginCountry(normalizedName);
+  const callsignPrefix = (callsign ?? "").trim().toUpperCase().slice(0, 3);
+  const inferred = CALLSIGN_PREFIX_TO_COUNTRY[callsignPrefix];
+  const alpha2 = alpha2ForOriginCountry(normalizedName) || inferred?.alpha2 || "";
+  const isUnknown = !alpha2;
+  const displayName =
+    normalizedName !== "—" && normalizedName !== "N/A"
+      ? normalizedName
+      : inferred?.name || "País desconhecido";
   const flagUrl = alpha2 ? `https://flagcdn.com/20x15/${alpha2.toLowerCase()}.png` : "";
   const classes = ["inline-flex items-center gap-1 align-middle", className]
     .filter(Boolean)
@@ -44,7 +58,7 @@ export function CountryWithFlag({
           🏳️
         </span>
       )}
-      <span className="leading-none">{isUnknown ? "País desconhecido" : normalizedName}</span>
+      <span className="leading-none">{isUnknown ? "País desconhecido" : displayName}</span>
     </span>
   );
 }
