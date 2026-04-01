@@ -9,6 +9,9 @@
     },
     "api/airports.js": {
       "maxDuration": 60
+    },
+    "api/airport-resolve.js": {
+      "maxDuration": 55
     }
   }
 }

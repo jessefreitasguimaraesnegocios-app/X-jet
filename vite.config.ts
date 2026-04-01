@@ -110,6 +110,42 @@ export default defineConfig({
               return;
             }
 
+            if (pathname === '/api/airport-resolve') {
+              try {
+                const {fetchAirportsByCodesOverpass} = await import('./api/airportsOverpass.mjs');
+                const parsed = parseUrl(raw, true);
+                const q = parsed.query ?? {};
+                const first = (v: string | string[] | undefined) =>
+                  Array.isArray(v) ? v[0] : v;
+                const depRaw = first(q.dep);
+                const arrRaw = first(q.arr);
+                const depStr = typeof depRaw === 'string' ? depRaw.trim() : '';
+                const arrStr = typeof arrRaw === 'string' ? arrRaw.trim() : '';
+                if (!depStr && !arrStr) {
+                  res.statusCode = 400;
+                  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                  res.end(JSON.stringify({error: 'missing_codes'}));
+                  return;
+                }
+                const map = await fetchAirportsByCodesOverpass([depStr, arrStr]);
+                const depU = depStr.toUpperCase().replace(/[^A-Z0-9]/g, '');
+                const arrU = arrStr.toUpperCase().replace(/[^A-Z0-9]/g, '');
+                const body = {
+                  departure: depU && map[depU] != null ? map[depU] : null,
+                  arrival: arrU && map[arrU] != null ? map[arrU] : null,
+                };
+                res.statusCode = 200;
+                res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                res.end(JSON.stringify(body));
+              } catch (e) {
+                console.error('[vite /api/airport-resolve]', e);
+                res.statusCode = 500;
+                res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                res.end(JSON.stringify({error: 'server_error'}));
+              }
+              return;
+            }
+
             next();
           });
         },

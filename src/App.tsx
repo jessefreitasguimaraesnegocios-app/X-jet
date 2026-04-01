@@ -40,6 +40,7 @@ import {
   fetchAirports,
   filterAirportsWithinRadiusKm,
 } from "./services/airportService";
+import { fetchRouteAirports } from "./services/routeAirportService";
 import { CountryWithFlag } from "./lib/countryFlag";
 import {
   fetchFlightRoute,
@@ -47,6 +48,11 @@ import {
 } from "./services/flightRouteService";
 import { speakText } from "./services/ttsService";
 import type { AirportPoi, FlightState } from "./types";
+
+type RouteAirportMarkers = {
+  departure: AirportPoi | null;
+  arrival: AirportPoi | null;
+};
 import { cn } from "./lib/utils";
 import { buildFlightSpeechBriefing } from "./lib/flightSpeech";
 import {
@@ -102,6 +108,22 @@ function planeIcon(
 
 const AIRPORT_PIN_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M21 16v-2l-8-5V3.5c0-.83-.67-1.5-1.5-1.5S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z"/></svg>`;
 
+function routeEndpointIcon(kind: "dep" | "arr", isLight: boolean) {
+  const depBg = isLight ? "#059669" : "#047857";
+  const arrBg = isLight ? "#ea580c" : "#9a3412";
+  const depFg = "#ecfdf5";
+  const arrFg = "#fff7ed";
+  const bg = kind === "dep" ? depBg : arrBg;
+  const fg = kind === "dep" ? depFg : arrFg;
+  const label = kind === "dep" ? "↑" : "↓";
+  return L.divIcon({
+    html: `<div style="width:30px;height:30px;border-radius:10px;background:${bg};border:2px solid rgba(255,255,255,0.9);box-shadow:0 2px 12px rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;color:${fg};font-weight:900;font-size:16px;line-height:1">${label}</div>`,
+    className: "xjet-route-endpoint-icon",
+    iconSize: [30, 30],
+    iconAnchor: [15, 15],
+  });
+}
+
 function airportMapIcon(isLight: boolean) {
   const bg = isLight
     ? "linear-gradient(155deg,#fffdfb 0%,#fde8d4 40%,#fbbf77 100%)"
@@ -138,6 +160,26 @@ function MapCenter({
     if (!snapToUser) return;
     map.setView(c, map.getZoom());
   }, [c, map, snapToUser]);
+  return null;
+}
+
+/** Centraliza o mapa nas coords salvas quando o utilizador toca em “onde estou” sem novo GPS. */
+function MapFlyToUserRequest({
+  nonce,
+  targetRef,
+}: {
+  nonce: number;
+  targetRef: React.MutableRefObject<[number, number] | null>;
+}) {
+  const map = useMap();
+  const prevNonceRef = useRef(0);
+  useEffect(() => {
+    if (nonce === 0 || nonce === prevNonceRef.current) return;
+    prevNonceRef.current = nonce;
+    const c = targetRef.current;
+    if (!c) return;
+    map.setView(c, map.getZoom(), { animate: true });
+  }, [nonce, map, targetRef]);
   return null;
 }
 
@@ -257,6 +299,8 @@ export default function App() {
   const [geoLoading, setGeoLoading] = useState(false);
   const [geoBanner, setGeoBanner] = useState<string | null>(null);
   const [routeInfo, setRouteInfo] = useState<FlightRouteInfo | null>(null);
+  const [routeAirportMarkers, setRouteAirportMarkers] =
+    useState<RouteAirportMarkers>({ departure: null, arrival: null });
   const [routeLoading, setRouteLoading] = useState(false);
   const [autoVoice, setAutoVoice] = useState(() =>
     readStoredBool(LS_AUTO_VOICE, true)
@@ -280,6 +324,10 @@ export default function App() {
   const flightsPoolRef = useRef<FlightState[]>([]);
   const radiusKmRef = useRef(radiusKm);
   const flightCacheCenterKeyRef = useRef<string | null>(null);
+  const lastUserGpsRef = useRef<[number, number] | null>(null);
+  const flyToUserTargetRef = useRef<[number, number] | null>(null);
+  const [userRecenterNonce, setUserRecenterNonce] = useState(0);
+  const [hasKnownUserGps, setHasKnownUserGps] = useState(false);
   const planeClickPendingRef = useRef<{
     timer: number;
     flight: FlightState;
@@ -523,7 +571,7 @@ export default function App() {
     []
   );
 
-  const requestCurrentLocation = useCallback(() => {
+  const requestFreshGpsLocation = useCallback(() => {
     if (!("geolocation" in navigator)) {
       setErr("Geolocalização não disponível neste aparelho.");
       return;
@@ -534,7 +582,13 @@ export default function App() {
       (p) => {
         setGeoLoading(false);
         setGeoBanner(null);
-        setCenter([p.coords.latitude, p.coords.longitude]);
+        const next: [number, number] = [
+          p.coords.latitude,
+          p.coords.longitude,
+        ];
+        lastUserGpsRef.current = next;
+        setHasKnownUserGps(true);
+        setCenter(next);
       },
       (e) => {
         setGeoLoading(false);
@@ -553,6 +607,22 @@ export default function App() {
       }
     );
   }, []);
+
+  const goToSavedUserLocation = useCallback(() => {
+    const saved = lastUserGpsRef.current;
+    if (!saved) return;
+    flyToUserTargetRef.current = saved;
+    setCenter([saved[0], saved[1]]);
+    setUserRecenterNonce((n) => n + 1);
+  }, []);
+
+  const onLocateUserButtonClick = useCallback(() => {
+    if (lastUserGpsRef.current) {
+      goToSavedUserLocation();
+      return;
+    }
+    requestFreshGpsLocation();
+  }, [goToSavedUserLocation, requestFreshGpsLocation]);
 
   useEffect(() => {
     let cancelled = false;
@@ -594,7 +664,13 @@ export default function App() {
           timeout: 18_000,
         });
         if (!cancelled) {
-          setCenter([p.coords.latitude, p.coords.longitude]);
+          const next: [number, number] = [
+            p.coords.latitude,
+            p.coords.longitude,
+          ];
+          lastUserGpsRef.current = next;
+          setHasKnownUserGps(true);
+          setCenter(next);
           setGeoBanner(null);
         }
         return;
@@ -608,7 +684,13 @@ export default function App() {
           timeout: 14_000,
         });
         if (!cancelled) {
-          setCenter([p.coords.latitude, p.coords.longitude]);
+          const next: [number, number] = [
+            p.coords.latitude,
+            p.coords.longitude,
+          ];
+          lastUserGpsRef.current = next;
+          setHasKnownUserGps(true);
+          setCenter(next);
           setGeoBanner(null);
         }
       } catch (e: unknown) {
@@ -646,6 +728,25 @@ export default function App() {
     if (!centerKey) return;
     void loadFlights({ mode: "expand" });
   }, [centerKey, radiusKm, loadFlights]);
+
+  useEffect(() => {
+    if (!pickDetailOpen || !pick) {
+      setRouteAirportMarkers({ departure: null, arrival: null });
+      return;
+    }
+    const dep = routeInfo?.departure?.trim() || null;
+    const arr = routeInfo?.arrival?.trim() || null;
+    if (!dep && !arr) {
+      setRouteAirportMarkers({ departure: null, arrival: null });
+      return;
+    }
+    const ac = new AbortController();
+    void fetchRouteAirports(dep, arr, ac.signal).then((r) => {
+      if (ac.signal.aborted) return;
+      setRouteAirportMarkers(r);
+    });
+    return () => ac.abort();
+  }, [pick?.icao24, pickDetailOpen, routeInfo?.departure, routeInfo?.arrival]);
 
   useEffect(() => {
     const ms =
@@ -962,7 +1063,7 @@ export default function App() {
           </button>
           <button
             type="button"
-            onClick={() => requestCurrentLocation()}
+            onClick={() => onLocateUserButtonClick()}
             disabled={geoLoading}
             className={cn(
               "min-h-9 min-w-9 sm:min-h-11 sm:min-w-11 rounded-full flex items-center justify-center active:scale-95 disabled:opacity-50 touch-manipulation border",
@@ -970,8 +1071,16 @@ export default function App() {
                 ? "bg-emerald-100/90 text-emerald-800 border-emerald-300/50 shadow-sm"
                 : "bg-emerald-500/20 text-emerald-400 border-emerald-500/30"
             )}
-            title="Onde estou agora"
-            aria-label="Atualizar minha localização no mapa"
+            title={
+              hasKnownUserGps
+                ? "Ir para minha localização"
+                : "Obter minha localização"
+            }
+            aria-label={
+              hasKnownUserGps
+                ? "Centralizar o mapa na minha localização"
+                : "Obter localização pelo GPS"
+            }
           >
             {geoLoading ? (
               <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
@@ -1108,6 +1217,10 @@ export default function App() {
               c={center}
               snapToUser={!(followPlane && primaryFollowIcao24)}
             />
+            <MapFlyToUserRequest
+              nonce={userRecenterNonce}
+              targetRef={flyToUserTargetRef}
+            />
             <MapFollowPlane
               pos={primaryFollowMapPos}
               enabled={Boolean(
@@ -1195,6 +1308,96 @@ export default function App() {
                   </Marker>
                 )
             )}
+            {pick &&
+              pickDetailOpen &&
+              routeAirportMarkers.departure && (
+                <Marker
+                  key={`route-dep-${routeAirportMarkers.departure.id}`}
+                  position={[
+                    routeAirportMarkers.departure.lat,
+                    routeAirportMarkers.departure.lon,
+                  ]}
+                  icon={routeEndpointIcon("dep", isLight)}
+                >
+                  <Popup>
+                    <div className="xjet-popup-inner p-1 min-w-[9rem]">
+                      <p
+                        className={cn(
+                          "text-[11px] font-black uppercase tracking-wide",
+                          isLight ? "text-emerald-700" : "text-emerald-400"
+                        )}
+                      >
+                        Decolagem
+                      </p>
+                      <p className="font-bold leading-tight mt-0.5">
+                        {routeAirportMarkers.departure.name}
+                      </p>
+                      <p className="text-xs opacity-80 font-mono mt-1">
+                        {[
+                          routeInfo?.departure,
+                          routeAirportMarkers.departure.iata,
+                          routeAirportMarkers.departure.icao,
+                        ]
+                          .filter(Boolean)
+                          .filter((v, i, a) => a.indexOf(v) === i)
+                          .join(" · ")}
+                      </p>
+                      {routeInfo?.departureName &&
+                        routeInfo.departureName !==
+                          routeAirportMarkers.departure.name && (
+                          <p className="text-[10px] opacity-70 mt-1 leading-snug">
+                            {routeInfo.departureName}
+                          </p>
+                        )}
+                    </div>
+                  </Popup>
+                </Marker>
+              )}
+            {pick &&
+              pickDetailOpen &&
+              routeAirportMarkers.arrival && (
+                <Marker
+                  key={`route-arr-${routeAirportMarkers.arrival.id}`}
+                  position={[
+                    routeAirportMarkers.arrival.lat,
+                    routeAirportMarkers.arrival.lon,
+                  ]}
+                  icon={routeEndpointIcon("arr", isLight)}
+                >
+                  <Popup>
+                    <div className="xjet-popup-inner p-1 min-w-[9rem]">
+                      <p
+                        className={cn(
+                          "text-[11px] font-black uppercase tracking-wide",
+                          isLight ? "text-orange-700" : "text-orange-400"
+                        )}
+                      >
+                        Pouso previsto
+                      </p>
+                      <p className="font-bold leading-tight mt-0.5">
+                        {routeAirportMarkers.arrival.name}
+                      </p>
+                      <p className="text-xs opacity-80 font-mono mt-1">
+                        {[
+                          routeInfo?.arrival,
+                          routeAirportMarkers.arrival.iata,
+                          routeAirportMarkers.arrival.icao,
+                        ]
+                          .filter(Boolean)
+                          .filter((v, i, a) => a.indexOf(v) === i)
+                          .join(" · ")}
+                      </p>
+                      {routeInfo?.arrivalName &&
+                        routeInfo.arrivalName !==
+                          routeAirportMarkers.arrival.name && (
+                          <p className="text-[10px] opacity-70 mt-1 leading-snug">
+                            {routeInfo.arrivalName}
+                          </p>
+                        )}
+                    </div>
+                  </Popup>
+                </Marker>
+              )}
             {trackedIcao24s.map((icao) => {
               const pts = trailsByIcao[icao];
               if (!pts || pts.length < 2) return null;
